@@ -16,10 +16,13 @@ from ksim_env.utils.custom_log import KRuntimeLogger
 from sim.core import Environment
 import uuid
 
+from typing import Any, Dict
+
 import pandas as pd
 logger = logging.getLogger(__name__)
 
 class KsimEnv(gym.Env):
+    metadata: Dict[str, Any] = {"render_modes": ["plot"], "render_fps": 10}
     def __init__(self, config_file: str = None):
         self._parse_config(config_file)
         self._ksim_init()
@@ -61,6 +64,7 @@ class KsimEnv(gym.Env):
         self.terminated = False
         self.truncated = False
         self.info = {}
+        self.render_mode = 'plot'
 
     def _parse_config(self, config_file: str):
         """
@@ -70,11 +74,10 @@ class KsimEnv(gym.Env):
         with open(config_file, 'r') as f:
             self.config = json.load(f)
             
-        self.req_profile_file = self.config.get("req_profile_file")
-        self.req_profile = pd.read_csv(self.req_profile_file)
         self.num_servers = self.config.get("num_servers")
         self.main_states = self.config.get("main_states")
         self.scaler_config = self.config.get("scaler_config")
+        self.render_dir = self.config.get("render_dir")
         
         # Đẩy timeout ra ngoài để có thể sử dụng timelimit wrapper, môi trường simpy thì cho chạy lặp vô hạn
         self.timeout = self.config.get("timeout")
@@ -98,6 +101,9 @@ class KsimEnv(gym.Env):
                 "avg_execution_time": sv_config["avg_execution_time"],
                 "sim_duration": sv_config["sim_duration"],
                 "state_resource_usage": {},
+                "req_profile_file": self.config.get("req_profile_file"),
+                "exec_time_file": self.config.get("exec_time_file")
+                
             }
             self.service_profile[service_id]["state_resource_usage"] = {
                 str_to_enum[state]: KFunctionResourceUsage(**usage)
@@ -110,7 +116,7 @@ class KsimEnv(gym.Env):
         self.sim = None
         topology = cloud_topology(self.num_servers)
         
-        benchmark = KBenchmark(req_profile=self.req_profile, service_configs=self.service_profile)
+        benchmark = KBenchmark(service_configs=self.service_profile)
 
         env = Environment()
         env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)))
@@ -247,8 +253,64 @@ class KsimEnv(gym.Env):
         return observation, reward, self.terminated, self.truncated, info
 
     def render(self):
-        pass
+        self.plot_request_details(log_dir=self.render_dir)
 
     def close(self):
         pass
+    
+    def plot_request_details(self, log_dir:str=None):
+        """
+        Plots the latency details for each service.
+        """
+        import matplotlib.pyplot as plt
+        import os
+        
+        request_details = self.sim.env.metrics.request_details
+        
+        pod_latency = []
+        scaler_latency = []
+        exec_interval = []
+    
+        for service, request in request_details.items():
+            for req_id, details in request.items():
+                pod_latency.append(details.get('pod_latency', 0))
+                scaler_latency.append(details.get('scaler_latency', 0))
+                exec_interval.append(details.get('execution_time', 0))
+                
+        def compute_cdf(data):
+            data = np.sort(data)
+            cdf = np.arange(1, len(data) + 1) / len(data)
+            return data, cdf
 
+        x1, y1 = compute_cdf(pod_latency)
+        x2, y2 = compute_cdf(scaler_latency)
+        x3, y3 = compute_cdf(exec_interval)
+
+        fig, axs = plt.subplots(3, 1, figsize=(8, 10), sharex=False)
+
+        axs[0].plot(x1, y1, label='Pod Latency', color='tab:blue')
+        axs[0].set_title('CDF of Pod Latency')
+        axs[0].set_ylabel('CDF')
+        axs[0].grid(True)
+
+        axs[1].plot(x2, y2, label='Scaler Latency', color='tab:green')
+        axs[1].set_title('CDF of Scaler Latency')
+        axs[1].set_ylabel('CDF')
+        axs[1].grid(True)
+
+        axs[2].plot(x3, y3, label='Exec Interval', color='tab:red')
+        axs[2].set_title('CDF of Exec Interval')
+        axs[2].set_xlabel('Seconds')
+        axs[2].set_ylabel('CDF')
+        axs[2].grid(True)
+
+        fig.tight_layout()
+
+        if log_dir is not None:
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            fig.savefig(os.path.join(log_dir, f"request_details_{self.env_id}.png"))
+        else:
+            plt.show()
+        plt.close()
+        
