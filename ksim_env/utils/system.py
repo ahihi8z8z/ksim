@@ -174,7 +174,7 @@ class KSystem(FaasSystem):
 
         t_wait = t_start - t_received
         t_exec = t_end - t_start
-        self.env.metrics.log_invocation(request.name, replica.image, replica.node.name, t_wait, t_start,
+        self.env.metrics.log_invocation(request, replica.image, replica.node.name, t_wait, t_start,
                                         t_exec, id(replica))
 
     def remove(self, fn: FunctionDeployment):

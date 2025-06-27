@@ -1,5 +1,6 @@
 from sim.metrics import Metrics
 from collections import defaultdict
+from sim.faas import FunctionRequest, FunctionReplica
 import logging
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ class KMetrics(Metrics):
         self.pod_latency = defaultdict(float)
         self.exec_interval = defaultdict(float)
         self.drop_count = defaultdict(int)
+        self.request_in = defaultdict(int)
+        self.request_out = defaultdict(int)
+        self.request_details = defaultdict(lambda: defaultdict(dict))
 
     def log_load(self, function_name, replicas):
         self.log('load model', replicas, function_name=function_name)
@@ -50,20 +54,28 @@ class KMetrics(Metrics):
     def log_unload(self, function_name, replicas):
         self.log('unload model', replicas, function_name=function_name)
         
-    def log_invocation(self, function_name, function_image, node_name, t_wait, t_start, t_exec, replica_id, **kwargs):
+    # Cái này log thông tin về việc gọi hàm dưới góc nhìn của faas system, cho biết thời gian request đợi scaler
+    def log_invocation(self, request, function_image, node_name, t_wait, t_start, t_exec, replica_id, **kwargs):
         function = self.env.faas.get_function_index()[function_image]
         mem = function.get_resource_requirements().get('memory')
         
-        self.scaler_latency[function_name] +=  t_wait
+        self.scaler_latency[request.name] +=  t_wait
+        self.request_details[request.name][request.request_id]['scaler_latency'] = t_wait
 
         self.log('invocations', {'t_wait': t_wait, 't_exec': t_exec, 't_start': t_start, 'memory': mem, **kwargs},
-                 function_name=function_name,
+                 function_name=request.name,
                  function_image=function_image, node=node_name, replica_id=replica_id)
         
+    # Cái này log thông tin về việc gọi hàm dưới góc nhìn của function replica, cho biết thời gian request đợi trong queue của pod
     def log_fet(self, function_name, function_image, node_name, t_fet_start, t_fet_end, replica_id, request_id,
                 **kwargs):
-        self.exec_interval[function_name] += (t_fet_end - t_fet_start)
-        self.pod_latency[function_name] += (kwargs.get('t_wait_end') - kwargs.get('t_wait_start'))
+        execution_time = t_fet_end - t_fet_start
+        pod_latency = kwargs.get('t_wait_end') - kwargs.get('t_wait_start', t_fet_start)
+        self.exec_interval[function_name] += execution_time
+        self.pod_latency[function_name] += pod_latency
+        
+        self.request_details[function_name][request_id]['pod_latency'] = pod_latency
+        self.request_details[function_name][request_id]['execution_time'] = execution_time
         
         self.log('fets', {'t_fet_start': t_fet_start, 't_fet_end': t_fet_end, **kwargs},
                  function_name=function_name,
@@ -71,4 +83,10 @@ class KMetrics(Metrics):
         
     def log_drop(self, function_name, request_id):
         self.drop_count[function_name] += 1
-        self.log('drops', {'request_id': request_id}, function_name=function_name)
+        self.log('drop request', {'request_id': request_id}, function_name=function_name)
+        
+    def log_request_in(self, function_name: str):
+        self.request_in[function_name] += 1
+        
+    def log_stop_exec(self, request: FunctionRequest, replica: FunctionReplica, **kwargs):
+        self.request_out[replica.function.name] += 1

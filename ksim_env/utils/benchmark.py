@@ -68,11 +68,13 @@ def function_trigger(env: Environment, deployment: FunctionDeployment, f_duratio
             while True:
                 ia = next(ia_generator)
                 yield env.timeout(ia)
+                env.metrics.log_request_in(deployment.fn.name)
                 env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=f_duration)))
         else:
             for _ in range(max_requests):
                 ia = next(ia_generator)
                 yield env.timeout(ia)
+                env.metrics.log_request_in(deployment.fn.name)
                 env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=f_duration)))
 
     except simpy.Interrupt:
