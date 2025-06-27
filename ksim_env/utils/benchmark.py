@@ -4,7 +4,8 @@ from sim.core import Environment
 from sim.faas import FunctionDeployment, Function, FunctionImage, FunctionContainer, FunctionRequest
 from sim import docker
 from ether.blocks.cells import Cloudlet, BusinessIsp
-from ksim_env.utils.traffic_gen import build_interval_generator, estimate_period
+from ksim_env.utils.traffic_gen import build_rpm, azure_ia_generator
+from ksim_env.utils.exectime_gen import build_et_df, azure_et_generator
 
 import simpy
 
@@ -14,44 +15,6 @@ import logging
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-
-sv_config_keys = [
-    'image_size',  # kích thước của image, đơn vị là bytes
-    'scale_max',  # số lượng replica tối đa của service
-    'trigger_type',  # loại trigger của service, có thể là 'http' hoặc 'timer'
-    'service_id'
-    ]
-
-# Trong azure dataset, Function Invocation Counts được ghi lại theo từng phút.
-def azure_ia_generator(profile: pd.DataFrame, HashFunction: str, sim_duration: int):
-    data = profile[profile['HashFunction'].str.startswith(HashFunction)]
-    row = data.sample(n=1, random_state=42).iloc[0, 4:].values 
-    period = 1440
-    
-    if len(row) < sim_duration:
-        sim_duration = len(row)
-        
-    def randint_step(low, high, step):
-        num = (high - low) // step
-        return low + np.random.randint(0, num) * step
-    
-    # chọn lấy 1 chu kì ngẫu nhiên
-    start = randint_step(0, len(row) - sim_duration + 1, period) 
-    
-    # Nhân 10 lên mô phỏng vô hạn
-    rpm = np.tile(row[start : start + sim_duration], 10)
-    
-    # period = estimate_period(rpm)
-    ia_gen = build_interval_generator(rpm, period)
-    
-    t_now = 0.0 # phút
-    while t_now < len(rpm):
-        arrival_minute = int(t_now)
-        if arrival_minute < sim_duration+1:
-            rpm[arrival_minute] += 1
-        ia =  ia_gen(t_now)
-        t_now += ia
-        yield ia*60 # trả về theo đơn vị s
         
 def cloud_topology(num_server: int) -> Topology:
     t = Topology()
@@ -62,20 +25,20 @@ def cloud_topology(num_server: int) -> Topology:
     t.init_docker_registry()
     return t
 
-def function_trigger(env: Environment, deployment: FunctionDeployment, f_duration: float, ia_generator, max_requests=None):
+def function_trigger(env: Environment, deployment: FunctionDeployment, et_generator, ia_generator, max_requests=None):
     try:
         if max_requests is None:
             while True:
                 ia = next(ia_generator)
                 yield env.timeout(ia)
                 env.metrics.log_request_in(deployment.fn.name)
-                env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=f_duration)))
+                env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=et_generator())))
         else:
             for _ in range(max_requests):
                 ia = next(ia_generator)
                 yield env.timeout(ia)
                 env.metrics.log_request_in(deployment.fn.name)
-                env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=f_duration)))
+                env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=et_generator())))
 
     except simpy.Interrupt:
         pass
@@ -92,8 +55,7 @@ class ScalingConfiguration:
     alert_window: int = 50  
 
 class KBenchmark(Benchmark):
-    def __init__(self, req_profile: pd.DataFrame, service_configs: Dict) -> None:
-        self.req_profile = req_profile
+    def __init__(self, service_configs: Dict) -> None:
         self.service_configs = service_configs
         super().__init__()
         
@@ -123,17 +85,22 @@ class KBenchmark(Benchmark):
             # tạo request profile
             service_id = deployments[i].fn.name
             trigger_type = self.service_configs[service_id]['trigger_type']
-            avg_execution_time = self.service_configs[service_id]['avg_execution_time']
             sim_duration = self.service_configs[service_id]['sim_duration']
+            req_profile = pd.read_csv(self.service_configs[service_id]['req_profile_file'])
+            exectime_profile = pd.read_csv(self.service_configs[service_id]['exec_time_file'])
             
             # sim_duration tính theo phút nhưng trong config để là giờ cho dễ hiểu
-            ia_generator = azure_ia_generator(self.req_profile, HashFunction=service_id, sim_duration=sim_duration*60)
+            rpm, period, start_day = build_rpm(req_profile, HashFunction=service_id, sim_duration=sim_duration*60)
+            ia_generator = azure_ia_generator(rpm, period)
+            
+            et_df = build_et_df(exectime_profile, service_id)
+            et_generator = azure_et_generator(et_df, start_day)
 
             # đẩy request vào hệ thống
             logger.info(f'Start triggering requests of service {service_id}')
             yield from function_trigger(env=env, 
                                         deployment=deployments[i],
-                                        f_duration=avg_execution_time,
+                                        et_generator=et_generator,
                                         ia_generator=ia_generator)
 
     def prepare_deployments(self) -> List[FunctionDeployment]:

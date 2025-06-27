@@ -1,7 +1,7 @@
 {
   "num_servers": 1,
   "random_init": false,
-  "req_profile_file": "/home/haipt/ksim/merged_invocation.csv",
+  "render_dir": "logs/test_ksim",
   "main_states": ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"],
   "timeout": 1209600,
   "max_episode_steps": 1440, 
@@ -12,6 +12,8 @@
   },
   "services": {
     "747b9c0c8fe8e7fff": {
+      "req_profile_file": "/home/haipt/ksim/invocation.csv",
+      "exec_time_file": "/home/haipt/ksim/exec_time.csv",
       "sim_duration": 24,
       "image_size": 200000000,
       "request_profit": 1,
