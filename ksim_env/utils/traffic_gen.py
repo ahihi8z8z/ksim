@@ -80,12 +80,13 @@ def build_rpm(profile: pd.DataFrame, HashFunction: str, sim_duration: int) -> tu
     
     # chọn lấy 1 ngày ngẫu nhiên
     start = randint_step(0, len(row) - sim_duration + 1, period) 
+    start -= start % period
     
     # Nhân 10 lên mô phỏng vô hạn
     rpm = np.tile(row[start : start + sim_duration], 10)
     
     # period = estimate_period(rpm)
-    return rpm, period, start 
+    return rpm, period, start//period 
 
 def azure_ia_generator(rpm, period: int):
     ia_gen = build_interval_generator(rpm, period)

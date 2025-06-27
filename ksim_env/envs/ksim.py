@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class KsimEnv(gym.Env):
     metadata: Dict[str, Any] = {"render_modes": ["plot"], "render_fps": 10}
-    def __init__(self, config_file: str = None):
+    def __init__(self, render_dir: str, config_file: str = None):
         self._parse_config(config_file)
         self._ksim_init()
         
@@ -64,7 +64,9 @@ class KsimEnv(gym.Env):
         self.terminated = False
         self.truncated = False
         self.info = {}
+        
         self.render_mode = 'plot'
+        self.render_dir = render_dir
 
     def _parse_config(self, config_file: str):
         """
@@ -77,7 +79,6 @@ class KsimEnv(gym.Env):
         self.num_servers = self.config.get("num_servers")
         self.main_states = self.config.get("main_states")
         self.scaler_config = self.config.get("scaler_config")
-        self.render_dir = self.config.get("render_dir")
         
         # Đẩy timeout ra ngoài để có thể sử dụng timelimit wrapper, môi trường simpy thì cho chạy lặp vô hạn
         self.timeout = self.config.get("timeout")
@@ -101,8 +102,8 @@ class KsimEnv(gym.Env):
                 "avg_execution_time": sv_config["avg_execution_time"],
                 "sim_duration": sv_config["sim_duration"],
                 "state_resource_usage": {},
-                "req_profile_file": self.config.get("req_profile_file"),
-                "exec_time_file": self.config.get("exec_time_file")
+                "req_profile_file": sv_config["req_profile_file"],
+                "exec_time_file": sv_config["exec_time_file"]
                 
             }
             self.service_profile[service_id]["state_resource_usage"] = {
