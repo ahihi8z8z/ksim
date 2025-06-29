@@ -33,12 +33,12 @@ class KsimEnv(gym.Env):
                                             self.scale_max, 
                                             shape=(self._num_service, len(self.main_states)), dtype=np.int64),
                 # 5 là hệ số overcommit
-                "invocation_avg": spaces.Box(0, 5*self.num_workers*self.scale_max - 1, shape=(self._num_service, 1), dtype=np.float64), 
+                "request_rate": spaces.Box(0, 5*self.num_workers*self.scale_max - 1, shape=(self._num_service, 1), dtype=np.float64), 
             }
         )
         
         self._container_state = np.zeros((self._num_service, len(self.main_states)), dtype=np.int64)
-        self._invocation_avg = np.zeros((self._num_service, 1), dtype=np.float64)
+        self._request_rate = np.zeros((self._num_service, 1), dtype=np.float64)
         
         # action (x,y,z): chuyển x container từ trạng thái y về trạng thái z
         service_action = [self.scale_max, len(self.main_states), len(self.main_states)] 
@@ -46,7 +46,7 @@ class KsimEnv(gym.Env):
         nvec_flat = nvec.flatten() 
         self.action_space = spaces.MultiDiscrete(nvec_flat)
         
-        self._old_invocation_count = {service_id: 0 for service_id in self.service_profile.keys()}
+        self._old_request_rate = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
@@ -142,11 +142,11 @@ class KsimEnv(gym.Env):
             self._container_state[i, 1] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
             self._container_state[i, 2] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
             
-            now_invocation = metrics.invocations[service_id]
-            self._invocation_avg[i, 0] = (now_invocation - self._old_invocation_count[service_id])
-            self._old_invocation_count[service_id] = now_invocation
+            now_request_rate = metrics.request_in[service_id]
+            self._request_rate[i, 0] = (now_request_rate - self._old_request_rate[service_id])
+            self._old_request_rate[service_id] = now_request_rate
             i = i + 1
-        return {"container_state": self._container_state, "invocation_avg": self._invocation_avg}
+        return {"container_state": self._container_state, "request_rate": self._request_rate}
 
     def _get_info(self):
         obs = self._get_obs()
@@ -155,13 +155,13 @@ class KsimEnv(gym.Env):
         self.info['NULL'] = 0
         self.info['UNLOADED_MODEL'] = 0
         self.info['LOADED_MODEL'] = 0
-        self.info['invocation_avg'] = 0
+        self.info['request_rate'] = 0
         
         for service_id in self.service_profile.keys():
             self.info['NULL'] += obs["container_state"][i, 0]
             self.info['UNLOADED_MODEL'] += obs["container_state"][i, 1]
             self.info['LOADED_MODEL'] += obs["container_state"][i, 2]
-            self.info['invocation_avg'] += obs["invocation_avg"][i, 0]
+            self.info['request_rate'] += obs["request_rate"][i, 0]
             i = i + 1
             
         if self.truncated:
@@ -180,7 +180,7 @@ class KsimEnv(gym.Env):
         self.terminated = False
         self.truncated = False
 
-        self._old_invocation_count = {service_id: 0 for service_id in self.service_profile.keys()}
+        self._old_request_rate = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
@@ -215,7 +215,7 @@ class KsimEnv(gym.Env):
             
             # Tỉ số thời gian chờ / thòi gian request thực sự được phục vụ
             
-            latency_rate = (0.000001 + total_scaler_latency + total_pod_latency) / (0.000001 + total_exec_interval + total_scaler_latency + total_pod_latency)
+            latency_rate = (total_scaler_latency + total_pod_latency) / (metrics.request_out[service_id]*self.
             
             reward += 3 - (latency_rate + ram_usage_percent + cpu_usage_percent)
             
