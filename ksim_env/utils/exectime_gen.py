@@ -7,7 +7,6 @@ def build_et_df(profile, HashFunction):
     return filtered
 
 def azure_et_generator(et_df, start_day):
-    print(f"aaaaaaaaaaaaaaaaaaaaaa {start_day}")
     row = et_df.iloc[start_day]
 
     percentile_columns = {
