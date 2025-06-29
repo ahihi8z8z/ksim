@@ -50,6 +50,7 @@ class KsimEnv(gym.Env):
         self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
+        self._old_request_out = {service_id: 0 for service_id in self.service_profile.keys()}
 
         self._cluster_cpu_total = 0
         self._cluster_ram_total = 0
@@ -184,6 +185,7 @@ class KsimEnv(gym.Env):
         self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
         self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
+        self._old_request_out = {service_id: 0 for service_id in self.service_profile.keys()}
         
         # Chạy trước 5s để khởi tạo ksim
         self.sim.step(self.step_size)
@@ -205,23 +207,26 @@ class KsimEnv(gym.Env):
             ram_usage_percent = metrics_server.get_avg_ram_utilization_func(service_id, now-self.step_size, now)/self._cluster_ram_total
             cpu_usage_percent = metrics_server.get_avg_cpu_utilization_func(service_id, now-self.step_size, now)/self._cluster_cpu_total
             
+            now_request_out = metrics.request_out[service_id]
             now_exec_interval = metrics.exec_interval[service_id]
             now_scaler_latency = metrics.scaler_latency[service_id]
             now_pod_latency = metrics.pod_latency[service_id]
-
-            total_exec_interval = now_exec_interval -self._old_exec_interval[service_id] 
-            total_scaler_latency = now_scaler_latency -self._old_scaler_latency[service_id] 
-            total_pod_latency = now_pod_latency - self._old_pod_latency[service_id] 
             
-            # Tỉ số thời gian chờ / thòi gian request thực sự được phục vụ
-            
-            latency_rate = (total_scaler_latency + total_pod_latency) / (metrics.request_out[service_id]*self.
-            
-            reward += 3 - (latency_rate + ram_usage_percent + cpu_usage_percent)
-            
+            # Không có request nào mới được phục vụ xong
+            if now_request_out == self._old_request_out[service_id]:
+                latency_rate = 1
+            else:
+                exec_interval_over_step = now_exec_interval - self._old_exec_interval[service_id] 
+                scaler_latency_over_step = now_scaler_latency - self._old_scaler_latency[service_id] 
+                pod_latency_over_step = now_pod_latency - self._old_pod_latency[service_id] 
+                latency_rate = (scaler_latency_over_step + pod_latency_over_step) / (scaler_latency_over_step + pod_latency_over_step + exec_interval_over_step)
+                
             self._old_exec_interval[service_id] = now_exec_interval
             self._old_scaler_latency[service_id] = now_scaler_latency
             self._old_pod_latency[service_id] = now_pod_latency
+            self._old_request_out[service_id] = now_request_out
+            
+            reward += 3 - (latency_rate + ram_usage_percent + cpu_usage_percent)
             
             logger.info(f"Service {service_id} - Reward: {reward}, Latency Rate: {latency_rate}, RAM Usage: {ram_usage_percent}, CPU Usage: {cpu_usage_percent}")
 
