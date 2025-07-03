@@ -50,9 +50,26 @@ class ScalingConfiguration:
     scale_max: int = 20
     scale_factor: int = 1
     scale_zero: bool = False
+    
+    # average requests per second threshold for scaling
+    rps_threshold: int = 20
 
-    # window over which to trigger scaler
-    alert_window: int = 50  
+    # window over which to track the average rps
+    alert_window: int = 50  # TODO currently not supported by FaasRequestScaler
+
+    # seconds the rps threshold must be violated to trigger scale up
+    rps_threshold_duration: int = 10
+
+    # target average cpu utilization of all replicas, used by HPA
+    target_average_utilization: float = 0.5
+
+    # target average rps over all replicas, used by AverageFaasRequestScaler
+    target_average_rps: int = 200
+
+    # target of maximum requests in queue
+    target_queue_length: int = 75
+
+    target_average_rps_threshold = 0.1
 
 class KBenchmark(Benchmark):
     def __init__(self, service_configs: Dict) -> None:
@@ -79,9 +96,6 @@ class KBenchmark(Benchmark):
             yield from env.faas.deploy(deployment)
 
         for i in range(len(deployments)):
-            # logger.info(f'Waiting for deployment {i+1}') 
-            # yield env.process(env.faas.poll_available_replica(f'{deployments[i].fn.name}'))
-
             # tạo request profile
             service_id = deployments[i].fn.name
             trigger_type = self.service_configs[service_id]['trigger_type']
@@ -116,6 +130,13 @@ class KBenchmark(Benchmark):
             scaling_config = ScalingConfiguration()
             scaling_config.scale_min = config['scale_min']
             scaling_config.scale_max = config['scale_max']
+            scaling_config.alert_window = config['alert_window']
+            scaling_config.rps_threshold = config['rps_threshold']
+            scaling_config.rps_threshold_duration = config['rps_threshold_duration']
+            scaling_config.target_average_utilization = config['target_average_utilization']
+            scaling_config.target_average_rps = config['target_average_rps']
+            scaling_config.target_queue_length = config['target_queue_length']
+            scaling_config.target_average_rps_threshold = config['target_average_rps_threshold']
 
             fd = FunctionDeployment(
                 func,

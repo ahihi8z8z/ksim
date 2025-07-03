@@ -6,8 +6,9 @@
   "max_episode_steps": 1440, 
   "step_size": 60,
   "scaler_config": {
-    "training": true,
-    "policy": ""
+    "scale_by_requests": false,
+    "scale_by_average_requests_per_replica": false,
+    "scale_by_queue_requests_per_replica": false
   },
   "services": {
     "747b9c0c8fe8e7fff": {
@@ -16,11 +17,17 @@
       "sim_duration": 24,
       "image_size": 200000000,
       "request_profit": 1,
-      "scale_min": 1,
-      "scale_max": 50,
-      "avg_execution_time": 0.5,
       "num_workers": 1,
       "trigger_type": "http",
+      "scale_min": 1,
+      "scale_max": 50,
+      "rps_threshold":  0.05,
+      "alert_window": 60,
+      "rps_threshold_duration": 60,
+      "target_average_utilization": 0.5,
+      "target_average_rps": 100,
+      "target_queue_length": 75,
+      "target_average_rps_threshold": 0.1,
       "state_resource_usage": {
         "NULL":        {"time": 0.0,  "ram": 0.0,   "cpu": 0.0,  "gpu": 0.0,  "disk": 0.0,  "network": 0.0},
         "SUSPENDED":   {"time": 5.0,  "ram": 100000000.0, "cpu": 1000, "gpu": 0.0,  "disk": 2.0,  "network": 0.1},

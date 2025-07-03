@@ -33,6 +33,9 @@ class KFunctionResourceUsage:
     def __setitem__(self, key, value):
         self.__setattr__(key, value)
 
+def nested_dict():
+    return defaultdict(dict)
+
 class KMetrics(Metrics):
     """
     KMetrics extends the base Metrics class to provide additional functionality.
@@ -46,7 +49,7 @@ class KMetrics(Metrics):
         self.drop_count = defaultdict(int)
         self.request_in = defaultdict(int)
         self.request_out = defaultdict(int)
-        self.request_details = defaultdict(lambda: defaultdict(dict))
+        self.request_details = defaultdict(nested_dict)
 
     def log_load(self, function_name, replicas):
         self.log('load model', replicas, function_name=function_name)
@@ -87,6 +90,7 @@ class KMetrics(Metrics):
         
     def log_request_in(self, function_name: str):
         self.request_in[function_name] += 1
+        self.log('receive request', 1, function_name=function_name)
         
     def log_stop_exec(self, request: FunctionRequest, replica: FunctionReplica, **kwargs):
         self.request_out[replica.function.name] += 1

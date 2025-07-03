@@ -76,7 +76,7 @@ def build_rpm(profile: pd.DataFrame, HashFunction: str, sim_duration: int) -> tu
         
     def randint_step(low, high, step):
         num = (high - low) // step
-        return low + np.random.randint(0, num) * step
+        return low + np.random.randint(0, num+1) * step
     
     # chọn lấy 1 ngày ngẫu nhiên
     start = randint_step(0, len(row) - sim_duration + 1, period) 

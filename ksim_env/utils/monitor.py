@@ -5,7 +5,7 @@ from typing import List
 import numpy as np
 from sim.core import Environment
 from sim.faas import FaasSystem
-from ksim_env.utils.system import AppState 
+from ksim_env.utils.appstate import AppState 
 
 import logging
     

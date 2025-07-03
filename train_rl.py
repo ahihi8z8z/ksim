@@ -13,7 +13,7 @@ from stable_baselines3.common.results_plotter import load_results, ts2xy, plot_r
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, BaseCallback
 from stable_baselines3.common.evaluation import evaluate_policy
 
-name_prefix = "PPO2"
+name_prefix = "PPO"
 
 
 ksim_log_dir = f"./logs/{name_prefix}/"
@@ -74,38 +74,37 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
         return True
 
 if __name__=="__main__":
-    train_env = make_vec_env(env_id="KsimEnv-V0", n_envs=8, 
+    train_env = make_vec_env(env_id="KsimEnv-V0", n_envs=12, 
                         vec_env_cls=SubprocVecEnv, 
                         env_kwargs= {"config_file": "config.json",
-                                     "render_dir": f"logs/{name_prefix}"})
+                                    "render_dir": f"logs/{name_prefix}"})
+
+    train_vec_env = VecMonitor(venv=train_env, 
+                        filename=f"logs/{name_prefix}")  
     
-    vec_env = unwrap_wrapper(train_env, Monitor) 
-    vec_env = VecMonitor(venv=train_env, 
-                        filename=f"logs/{name_prefix}", 
-                        info_keywords=('NULL', 'UNLOADED_MODEL', 'LOADED_MODEL', 'request_rate', 'action'))  
+    eval_env = make_vec_env(env_id="KsimEnv-V0", n_envs=1, 
+                    vec_env_cls=SubprocVecEnv, 
+                    env_kwargs= {"config_file": "config.json",
+                                "render_dir": f"logs/{name_prefix}"})
+
+    val_vec_env = VecMonitor(venv=eval_env, 
+                        filename=f"logs/{name_prefix}")  
     
+    eval_callback = EvalCallback(eval_env, best_model_save_path=f"./logs/{name_prefix}",
+                                log_path=f"./logs/{name_prefix}", eval_freq=1440/2, n_eval_episodes = 1,
+                                deterministic=True, render=False)
+
+    # checkpoint_callback = SaveOnBestTrainingRewardCallback(log_dir=f"logs/{name_prefix}",
+    #                                                       check_freq=144)
     model = PPO(policy="MultiInputPolicy", n_steps=32, 
-                env=train_env, 
+                env=train_vec_env, 
                 verbose=2, device="cpu",
                 tensorboard_log="./ksim_tensorboard/")
-        
-    checkpoint_callback = SaveOnBestTrainingRewardCallback(log_dir=f"logs/{name_prefix}",
-                                                           check_freq=1440)
     
     model.learn(total_timesteps=1440*14*30, 
-                callback=checkpoint_callback, 
+                callback=eval_callback, 
                 log_interval=1, progress_bar=True, 
                 tb_log_name=name_prefix) 
     
-    model.save(f"./logs/{name_prefix}_ksim_model")
-
-    # eval_env = make_vec_env(env_id="KsimEnv-V0", n_envs=12, 
-    #                     vec_env_cls=SubprocVecEnv, 
-    #                     env_kwargs= {"config_file": "config.json"})
-    
-
-    # model = PPO.load(path="logs/ppo2/ppo2_960000_steps.zip", env=eval_env, device="cpu")
-    
-    # mean_reward, std_reward = evaluate_policy(model=model, env=eval_env, n_eval_episodes=1, deterministic=True, render=True)
-    # print(f"mean_reward={mean_reward:.2f} +/- {std_reward}")
+    model.save(f"./logs/{name_prefix}/ksim_model")
            
