@@ -203,10 +203,11 @@ class KsimEnv(gym.Env):
         return self.info
     
     def _get_reward(self):
+        reward = 0;
         # Hướng tới cân bằng request latency, tỉ lệ drop và tài nguyên sử dụng
         for service_id, _ in self.service_profile.items():
             # Không có request nào mới được phục vụ xong
-            if self._request_drop_over_step == 0:
+            if self._request_out_over_step == 0:
                 exec_rate = 0
             else:
                 exec_rate = self._exec_interval_over_step / (self._scaler_latency_over_step + self._pod_latency_over_step + self._exec_interval_over_step)
