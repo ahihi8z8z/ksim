@@ -214,13 +214,13 @@ class KsimEnv(gym.Env):
             
             # Không có request drop và không có request phục vụ xong
             if self._request_drop_over_step + self._request_out_over_step == 0:
-                drop_rate = 1
+                acceptance_rate = 0
             else:
-                drop_rate = self._request_out_over_step/(self._request_out_over_step + self._request_drop_over_step)
+                acceptance_rate = self._request_out_over_step/(self._request_out_over_step + self._request_drop_over_step)
                 
-            reward += 3 - (drop_rate + 10*self._ram_usage_percent + 10*self._cpu_usage_percent) + exec_rate
+            reward += 2 - (10*self._ram_usage_percent + 10*self._cpu_usage_percent) + exec_rate + acceptance_rate
             
-            logger.info(f"Service {service_id} - Reward: {reward}, Exec Rate: {exec_rate}, Drop Rate: {drop_rate}, RAM Usage: {self._ram_usage_percent}, CPU Usage: {self._cpu_usage_percent}")
+            logger.info(f"Service {service_id} - Reward: {reward}, Exec Rate: {exec_rate}, Acceptance Rate: {acceptance_rate}, RAM Usage: {self._ram_usage_percent}, CPU Usage: {self._cpu_usage_percent}")
 
         return reward
 
