@@ -30,7 +30,7 @@ class FaasRequestScaler:
             if self.function_invocations.get(self.fn_name, None) is None:
                 self.function_invocations[self.fn_name] = 0
             last_invocations = self.function_invocations.get(self.fn_name, 0)
-            current_total_invocations = env.metrics.request_in.get(self.fn_name, 0)
+            current_total_invocations = env.metrics.invocations.get(self.fn_name, 0)
             invocations = current_total_invocations - last_invocations
             self.function_invocations[self.fn_name] += invocations
             # TODO divide by alert window, but needs to store the invocations, such that reconcile_interval != alert_window is possible
@@ -38,12 +38,12 @@ class FaasRequestScaler:
             logger.debug(f'invocations {invocations} and reconcile_interval {self.reconcile_interval} and threshold {self.threshold}')
             if (invocations / self.reconcile_interval) >= self.threshold:
                 scale = (config.scale_factor / 100) * config.scale_max
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {np.ceil(scale)}')       
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
+                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}')       
             else:
                 scale = (config.scale_factor / 100) * config.scale_max
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {np.ceil(scale)}')
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
+                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
 
     def stop(self):
         self.running = False
@@ -74,7 +74,9 @@ class AverageFaasRequestScaler:
                 
             running = len(faas.get_replicas(self.fn.name, AppState.LOADED_MODEL, False))
             running += len(faas.get_replicas(self.fn.name, AppState.ACTIVING, False))
+            
             if running == 0:
+                logger.debug("scaler 0 running replica")
                 continue
 
             starting_replicas = len(faas.get_replicas(self.fn.name, AppState.STARTING, False))
@@ -82,7 +84,7 @@ class AverageFaasRequestScaler:
             starting_replicas += len(faas.get_replicas(self.fn.name, AppState.LOADING_MODEL, False))
 
             last_invocations = self.function_invocations.get(self.fn_name, 0)
-            current_total_invocations = env.metrics.request_in.get(self.fn_name, 0)
+            current_total_invocations = env.metrics.invocations.get(self.fn_name, 0)
             invocations = current_total_invocations - last_invocations
             self.function_invocations[self.fn_name] += invocations
             average = invocations / running
@@ -96,28 +98,29 @@ class AverageFaasRequestScaler:
                     updated_desired_replicas = math.ceil(running * (average / self.threshold))
 
             if desired_replicas > running and updated_desired_replicas < running:
-                # no scaling in case of reversed decision
+                logger.debug(f"scaler no scaling in case of reversed decision: desired_replicas-{desired_replicas}, updated_desired_replicas-{updated_desired_replicas}, running-{running}")
                 continue
 
             ratio = average / self.threshold
             if 1 > ratio >= 1 - self.fn.scaling_config.target_average_rps_threshold:
-                # ratio is sufficiently close to 1.0
+                logger.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
                 continue
 
             if 1 < ratio < 1 + self.fn.scaling_config.target_average_rps_threshold:
+                logger.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
                 continue
 
-            logger.debug(f'desired_replicas {desired_replicas} and running {running}')
+            logger.debug(f'scaler desired_replicas {desired_replicas} and running {running}')
             if desired_replicas < running:
                 # scale down
                 scale = running - desired_replicas
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {np.ceil(scale)}')
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
+                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
             else:
                 # scale up
                 scale = desired_replicas - running
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {np.ceil(scale)}') 
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
+                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
 
     def stop(self):
         self.running = False
@@ -189,13 +192,13 @@ class AverageQueueFaasRequestScaler:
             if desired_replicas < running:
                 # scale down
                 scale = running - desired_replicas
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {np.ceil(scale)}')
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
+                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
             else:
                 # scale up
                 scale = desired_replicas - running
-                env.process(faas.change_state(self.fn_name, np.ceil(scale), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {np.ceil(scale)}') 
+                env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
+                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
 
     def stop(self):
         self.running = False
@@ -298,10 +301,10 @@ class HorizontalPodAutoscaler:
                 if desired_replicas < running:
                     # scale down
                     scale = running - desired_replicas
-                    self.env.process(faas.change_state(self.fn_name, np.ceil(scale), "LOADED_MODEL",  "NULL"))
-                    logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {np.ceil(scale)}')
+                    self.env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
+                    logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
                 else:
                     # scale up
                     scale = desired_replicas - running
-                    self.env.process(faas.change_state(self.fn_name, np.ceil(scale), "NULL", "LOADED_MODEL"))
-                    logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {np.ceil(scale)}') 
+                    self.env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
+                    logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
