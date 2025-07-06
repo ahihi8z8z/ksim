@@ -24,7 +24,13 @@ logger = logging.getLogger(__name__)
 def smooth_list(list, window=60):
     if len(list) < window:
         return []
-    return [np.mean(list[i:i+window]) for i in range(len(list) - window + 1)]
+    return np.array([np.mean(list[i:i+window]) for i in range(len(list) - window + 1)])
+
+def rolling_sum(data, window):
+    return np.array([sum(data[i:i+window]) for i in range(len(data) - window + 1)])
+
+def split_into_chunks(data, window):
+    return np.array([np.array(data[i:i+window]) for i in range(0, len(data), window)])
 
 def plot_request_details(request_details, log_dir: str = None):
     latency = []
@@ -88,16 +94,33 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     plt.close()
 
 
+    labels = ['Dropped', 'Delayed', 'Non Delayed']
+    sizes = [sum(request_drop), sum(latency), sum(request_out) - sum(latency)]
+    filtered = [(l, s) for l, s in zip(labels, sizes) if s > 0]
+    labels, sizes = zip(*filtered) if filtered else ([], [])
+    def make_autopct(values):
+        def autopct(pct):
+            total = sum(values)
+            val = int(round(pct * total / 100.0))
+            return f"{val}\n({pct:.1f}%)"
+        return autopct
     plt.figure(figsize=(6, 6))
-    plt.pie([len(request_drop), len(latency), len(request_drop) - len(latency)], labels=['Droped', 'Delayed', 'Non Delayed'], autopct='%1.1f%%', startangle=90)
-    plt.axis('equal')  
-    plt.title('Request components')
-    plt.tight_layout()
-    plt.savefig(f"logs/{name_prefix}/request_components.png")
+    if sizes:
+        wedges, texts, autotexts = plt.pie(
+            sizes,
+            labels=labels,
+            autopct=make_autopct(sizes),
+            startangle=90,
+            labeldistance=0.7,
+            textprops=dict(color="white", fontsize=10)
+        )
+        plt.axis('equal')
+        plt.title('Request Components')
+        plt.tight_layout()
+        plt.savefig(f"logs/{name_prefix}/request_components.png")
     plt.close()
     
-    
-    fig, axs = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
     axs[0].plot(smooth_list(ram_util, window=60))
     axs[0].set_ylabel("RAM Util (%)")
     axs[0].grid(True)
@@ -106,15 +129,26 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     axs[1].set_ylabel("CPU Util (%)")
     axs[1].set_xlabel("Time Step")
     axs[1].grid(True)
+    
+    cpu_sum = rolling_sum(cpu_util, window=1440)
+    req_sum = rolling_sum(request_out, window=1440)
 
-    fig.suptitle("Smoothed RAM and CPU Utilization (60 pts)")
+    # Tránh chia cho 0
+    cpu_per_request = [c / r if r != 0 else 0 for c, r in zip(cpu_sum, req_sum)]
+
+    axs[2].plot(cpu_per_request)
+    axs[2].set_ylabel("CPU Util per request")
+    axs[2].set_xlabel("Time Step")
+    axs[2].grid(True)
+
+    fig.suptitle("Smoothed RAM and CPU Utilization")
     plt.tight_layout()
     plt.savefig(f"logs/{name_prefix}/resource_util.png")
     plt.close()
 
     plt.figure(figsize=(10, 5))
     # plt.plot(null, label='Null')
-    # plt.plot(unloaded, label='Unloaded')
+    plt.plot(smooth_list(unloaded, window=60), label='Unloaded')
     plt.plot(smooth_list(loaded, window=60), label='Loaded')
     plt.xlabel("Time Step")
     plt.ylabel("Count")

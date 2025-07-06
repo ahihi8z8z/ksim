@@ -74,7 +74,7 @@ class SaveOnBestTrainingRewardCallback(BaseCallback):
         return True
 
 if __name__=="__main__":
-    train_env = make_vec_env(env_id="KsimEnv-V0", n_envs=12, 
+    train_env = make_vec_env(env_id="KsimEnv-V0", n_envs=1, 
                         vec_env_cls=SubprocVecEnv, 
                         env_kwargs= {"config_file": "config.json",
                                     "render_dir": f"logs/{name_prefix}"})
@@ -91,7 +91,7 @@ if __name__=="__main__":
                         filename=f"logs/{name_prefix}")  
     
     eval_callback = EvalCallback(eval_env, best_model_save_path=f"./logs/{name_prefix}",
-                                log_path=f"./logs/{name_prefix}", eval_freq=1440/2, n_eval_episodes = 1,
+                                log_path=f"./logs/{name_prefix}", eval_freq=1440/4, n_eval_episodes = 1,
                                 deterministic=True, render=False)
 
     # checkpoint_callback = SaveOnBestTrainingRewardCallback(log_dir=f"logs/{name_prefix}",
