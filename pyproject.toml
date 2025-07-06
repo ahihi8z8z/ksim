@@ -11,4 +11,12 @@ version = "0.0.1"
 dependencies = [
   "gymnasium",
   "pre-commit",
+  "faas-sim==0.0.1.dev1",
+  "gymnasium",
+  "matplotlib",
+  "numpy",
+  "pandas",
+  "simpy",
+  "stable-baselines3",
+  "tensorboard"
 ]
