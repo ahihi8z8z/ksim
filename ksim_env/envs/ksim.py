@@ -203,7 +203,7 @@ class KsimEnv(gym.Env):
         return self.info
     
     def _get_reward(self):
-        reward = 0;
+        reward = 0
         # Hướng tới cân bằng request latency, tỉ lệ drop và tài nguyên sử dụng
         for service_id, _ in self.service_profile.items():
             # Không có request nào mới được phục vụ xong
@@ -276,9 +276,6 @@ class KsimEnv(gym.Env):
         info = self._get_info()
 
         return self.observation, reward, self.terminated, self.truncated, info
-
-
-        return self.sim.env.metrics.request_details
     
     def render(self):
         return
