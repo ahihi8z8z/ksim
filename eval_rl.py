@@ -138,8 +138,8 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     axs[1].set_xlabel("Time Step")
     axs[1].grid(True)
     
-    cpu_sum = rolling_sum(cpu_util, window=1440)
-    req_sum = rolling_sum(request_out, window=1440)
+    cpu_sum = rolling_sum(cpu_util, window=288)
+    req_sum = rolling_sum(request_out, window=288)
 
     # Tránh chia cho 0
     cpu_per_request = [c / r if r != 0 else 0 for c, r in zip(cpu_sum, req_sum)]
@@ -182,7 +182,7 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
 if __name__=="__main__":
     eval_env = make_vec_env(env_id="KsimEnv-V0", n_envs=1, 
                         vec_env_cls=SubprocVecEnv, 
-                        env_kwargs= {"config_file": "config.json",
+                        env_kwargs= {"config_file": "config_rl_eval.json",
                                     "render_dir": f"logs/{name_prefix}"})
     model = PPO.load(path="/home/haipt/ksim/logs/PPO/best_model.zip",
                      env=eval_env, device="cpu")

@@ -5,7 +5,7 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 
-name_prefix = "scale_by_requests"
+name_prefix = "scale_by_average_requests_per_replica"
 
 
 ksim_log_dir = f"logs/{name_prefix}/"
@@ -130,8 +130,8 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     axs[1].set_xlabel("Time Step")
     axs[1].grid(True)
     
-    cpu_sum = rolling_sum(cpu_util, window=1440)
-    req_sum = rolling_sum(request_out, window=1440)
+    cpu_sum = rolling_sum(cpu_util, window=288)
+    req_sum = rolling_sum(request_out, window=288)
 
     # Tránh chia cho 0
     cpu_per_request = [c / r if r != 0 else 0 for c, r in zip(cpu_sum, req_sum)]
@@ -171,7 +171,7 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     plt.close()
 
 
-env = gym.make('KsimEnv-V0', config_file="config.json", render_dir=f"logs/{name_prefix}")
+env = gym.make('KsimEnv-V0', config_file="config_baseline.json", render_dir=f"logs/{name_prefix}")
 obs = env.reset()
 truncated = False
 request_in = []

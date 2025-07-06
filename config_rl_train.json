@@ -3,10 +3,10 @@
   "random_init": false,
   "main_states": ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"],
   "timeout": 1209600,
-  "max_episode_steps": 20160, 
-  "step_size": 60,
+  "max_episode_steps": 288, 
+  "step_size": 300,
   "scaler_config": {
-    "scale_by_requests": true,
+    "scale_by_requests": false,
     "scale_by_average_requests_per_replica": false,
     "scale_by_queue_requests_per_replica": false
   },
@@ -14,7 +14,7 @@
     "747b9c0c8fe8e7fff": {
       "req_profile_file": "/home/haipt/ksim/invocation.csv",
       "exec_time_file": "/home/haipt/ksim/exec_time.csv",
-      "sim_duration": 336,
+      "sim_duration": 24,
       "image_size": 200000000,
       "request_profit": 1,
       "num_workers": 1,
