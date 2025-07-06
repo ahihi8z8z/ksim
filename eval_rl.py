@@ -188,7 +188,7 @@ if __name__=="__main__":
                      env=eval_env, device="cpu")
     env = model.get_env()
     obs = env.reset()
-    truncated = [False]
+    dones = [False]
     request_in = []
     request_out = []
     request_drop = []
@@ -200,7 +200,7 @@ if __name__=="__main__":
     loaded = []
 
     info = {}
-    while not truncated[0]:
+    while not dones[0]:
         action, _states = model.predict(obs, deterministic=True)
         obs, rewards, dones, info = env.step(action)
         request_in.append(info[0]['request_in_over_step'])
@@ -213,7 +213,7 @@ if __name__=="__main__":
         unloaded.append(info[0]['UNLOADED_MODEL'])
         loaded.append(info[0]['LOADED_MODEL'])
         
-    latency = plot_request_details(info["request_details"], f"logs/{name_prefix}")
+    latency = plot_request_details(info[0]["request_details"], f"logs/{name_prefix}")
 
     plot_logs(
         name_prefix=name_prefix, 
