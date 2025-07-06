@@ -1,17 +1,16 @@
-import enum
 import logging
-from sim.core import Environment
-
+import simpy
 from collections import defaultdict, Counter
 from typing import Dict, List
 
-import simpy
+from sim.core import Environment
 from sim.faas import FunctionDeployment, FunctionContainer, FunctionRequest, FunctionSimulator
-
 from sim.skippy import create_function_pod
 from sim.faas.core import FaasSystem
-from ksim_env.utils.rl_scaler import RlScaler
+
+from ksim_env.utils.scaler import FaasRequestScaler, AverageFaasRequestScaler, AverageQueueFaasRequestScaler, HorizontalPodAutoscaler
 from ksim_env.utils.replica import KFunctionReplica
+from ksim_env.utils.appstate import AppState
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +18,6 @@ logger = logging.getLogger(__name__)
 # Mỗi trạng thái tiêu thụ một số lượng tài nguyên nhất định.
 # NULL, UNLOADED_MODEL, LOADED_MODEL là các trạng thái có thể điều khiển được.
 # Còn lại là các trạng thái trung gian.
-class AppState(enum.IntEnum):
-    NULL = 0
-    CONCEIVED = 1
-    STARTING = 2
-    SUSPENDED = 3
-    UNLOADED_MODEL = 4
-    LOADING_MODEL =  5
-    UNLOADING_MODEL = 6
-    LOADED_MODEL = 7
-    ACTIVING = 8
     
 str_to_enum = {s.name: s.value for s in AppState}
 
@@ -51,9 +40,10 @@ class KSystem(FaasSystem):
         self.replica_count: Dict[str, int] = dict()
         self.functions_definitions = Counter()
         
-        self.training = scaler_config.get('training', False)
-        self.policy = scaler_config.get('policy', None)
-        self.rl_scalers: Dict[str, RlScaler] = dict()
+        self.scaler_config = scaler_config
+        self.faas_scalers: Dict[str, FaasRequestScaler] = dict()
+        self.avg_faas_scalers: Dict[str, AverageFaasRequestScaler] = dict()
+        self.queue_faas_scalers: Dict[str, AverageQueueFaasRequestScaler] = dict()
         
         self.states = ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"]
         self.forward_transitions = [self.scale_up, self.do_load_model]
@@ -107,9 +97,16 @@ class KSystem(FaasSystem):
 
         self.functions_deployments[fd.name] = fd
         
-        if not self.training:
-            self.rl_scalers[fd.name] = RlScaler(self.policy.get(fd.name, None))
-            self.env.process(self.rl_scalers[fd.name].run())
+        self.faas_scalers[fd.name] = FaasRequestScaler(fd, self.env)
+        self.avg_faas_scalers[fd.name] = AverageFaasRequestScaler(fd, self.env)
+        self.queue_faas_scalers[fd.name] = AverageQueueFaasRequestScaler(fd, self.env)
+
+        if self.scaler_config.get("scale_by_requests"):
+            self.env.process(self.faas_scalers[fd.name].run())
+        if self.scaler_config.get("scale_by_average_requests_per_replica"):
+            self.env.process(self.avg_faas_scalers[fd.name].run())
+        if self.scaler_config.get("scale_by_queue_requests_per_replica"):
+            self.env.process(self.queue_faas_scalers[fd.name].run())
 
         for f in fd.fn_containers:
             self.function_containers[f.image] = f
@@ -118,7 +115,7 @@ class KSystem(FaasSystem):
         self.env.metrics.log_function_deployment(fd)
         self.env.metrics.log_function_deployment_lifecycle(fd, 'deploy')
         logger.info('deploying function %s with scale_min=%d', fd.name, fd.scaling_config.scale_min)
-        yield from self.scale_up(fd.name, fd.scaling_config.scale_min)    
+        yield from self.change_state(fd.name, fd.scaling_config.scale_min, "NULL", "LOADED_MODEL")  
         
 
     def deploy_replica(self, fd: FunctionDeployment, fn: FunctionContainer, services: List[FunctionContainer]):
@@ -134,30 +131,24 @@ class KSystem(FaasSystem):
         yield self.scheduler_queue.put((replica, services))
 
     def invoke(self, request: FunctionRequest):
-        # TODO: how to return a FunctionResponse?
-        # logger.debug('invoking function %s', request.name)
-
         if request.name not in self.functions_deployments.keys():
             logger.warning('invoking non-existing function %s', request.name)
             return
 
         t_received = self.env.now
 
-        replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
-
+        replicas = self.get_replicas2(request.name, AppState.LOADED_MODEL, False)
         if not replicas:
-            yield from self.poll_available_replica(request.name)
+            retry = 0
+            while (len(self.get_replicas2(request.name, AppState.LOADED_MODEL, False)) < 1)  and (retry < 74):
+                yield self.env.timeout(0.5)
+                retry += 1
             
-        replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
-        
+        replicas = self.get_replicas2(request.name, AppState.LOADED_MODEL, False)
         # Thử drop request sau 30s xem
         if not replicas:
             self.env.metrics.log_drop(request.name, request.request_id)
             return
-
-        # if not replicas:
-        #     logger.warning('no replicas available for function %s at time %s', request.name, self.env.now)
-        #     raise ValueError
         
         logger.debug('asking load balancer for replica for request %d', request.request_id)
         replica = self.next_replica(request)
@@ -174,7 +165,7 @@ class KSystem(FaasSystem):
 
         t_wait = t_start - t_received
         t_exec = t_end - t_start
-        self.env.metrics.log_invocation(request.name, replica.image, replica.node.name, t_wait, t_start,
+        self.env.metrics.log_invocation(request, replica.image, replica.node.name, t_wait, t_start,
                                         t_exec, id(replica))
 
     def remove(self, fn: FunctionDeployment):
@@ -182,24 +173,32 @@ class KSystem(FaasSystem):
 
         replica_count = self.replica_count[fn.name]
         yield from self.scale_down(fn.name, replica_count)
+        
+        self.faas_scalers[fn.name].stop()
+        self.avg_faas_scalers[fn.name].stop()
+        self.queue_faas_scalers[fn.name].stop()
 
         del self.functions_deployments[fn.name]
-        del self.rl_scalers[fn.name]
+        del self.faas_scalers[fn.name]
+        del self.avg_faas_scalers[fn.name]
+        del self.queue_faas_scalers[fn.name]
         del self.replica_count[fn.name]
         for container in fn.fn_containers:
             del self.functions_definitions[container.image]
 
     def scale_down(self, fn_name: str, remove: int):
         env = self.env
-        can_remove = remove
-        running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
-        
-        logger.debug('request to scale down function %s by %d replicas \n', fn_name, remove)
-        
-        if running_replicas == 0:
-            logger.debug('no replicas to scale down for function %s \n', fn_name)
+        can_remove = int(remove)
+        if can_remove <= 0:
             return
         
+        running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
+        if running_replicas < remove:
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, interval=0.5, 
+                                                    state=AppState.UNLOADED_MODEL, max_retry=60)
+            
+        running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
+
         if running_replicas < remove:
             can_remove = running_replicas
 
@@ -238,7 +237,6 @@ class KSystem(FaasSystem):
     def choose_replicas_to_remove(self, fn_name: str, n: int):
         # TODO: không scale down các replica đang có request
         running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
-
         return running_replicas[len(running_replicas) - n:]
 
 
@@ -248,7 +246,7 @@ class KSystem(FaasSystem):
         config = fd.scaling_config
         ranking = fd.ranking
 
-        scale = replicas
+        scale = int(replicas)
         if self.replica_count.get(fn_name, None) is None:
             self.replica_count[fn_name] = 0
 
@@ -301,10 +299,12 @@ class KSystem(FaasSystem):
             self.env.process(process(self.env))
         self.env.process(self.run_scheduler_worker())
 
-    def poll_available_replica(self, fn: str, interval=0.5):
+    def poll_available_replica(self, fn: str, num_entry: int = 1,  interval:float = 0.5, state:AppState = AppState.LOADED_MODEL, max_retry:int = 60):
         retry = 0
-        while not self.get_replicas(fn, AppState.LOADED_MODEL) and retry < 60:
+        # Ta cần lấy các replica đang không bị lock
+        while (len(self.get_replicas(fn, state)) < num_entry)  and (retry < max_retry):
             yield self.env.timeout(interval)
+            retry += 1
 
     def run_scheduler_worker(self):
         env = self.env
@@ -368,6 +368,9 @@ class KSystem(FaasSystem):
         replica.simulator = self.env.simulator_factory.create(self.env, fn)
         return replica
 
+    # TODO: Vấn đề của cách làm hiện tại là sẽ có những container bị chuyển trạng thái dở dang khi api muốn nhảy nhiều bước
+    # Cách fix hợp lý là logic chọn các relica để chuyển trạng thái nên do hàm change_state thực hiện.
+    # Các hàm chuyển trạng thái nhận list này và thực hiện hành động
     def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str):
         logger.info(f'Received request changing {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
         from_idx = self.states.index(from_state)
@@ -387,19 +390,27 @@ class KSystem(FaasSystem):
 
     def do_load_model(self, fn_name: str, num_replica: int = 0):
         # logger.debug(f'received request to load model for {num_replica} replicas of {fn_name}')
-        replica_count = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
-        logger.debug(f'found {replica_count} replicas of {fn_name} in UNLOADED_MODEL state')
+        running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+        can_do = int(num_replica)
         
-        if replica_count == 0:
-            logger.info(f'no replica to load model for {fn_name}')
+        if can_do == 0:
             return
         
-        if replica_count <= num_replica:
-            num_replica = replica_count
-
-        logger.info(f'load model for {num_replica} replica of {fn_name}')
+        if len(running_replicas) < can_do:
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
+                                                    interval=0.5, state=AppState.UNLOADED_MODEL, max_retry=60)
+            
         running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
-        replicas = running_replicas[len(running_replicas) - num_replica:]
+        if len(running_replicas) < can_do:
+            can_do = len(running_replicas)
+            
+        if can_do == 0:
+            logger.info('Function %s wanted to load model, but no replicas were loaded', fn_name)
+            return
+        
+        logger.info(f'loading model for {can_do} replica of {fn_name}')
+        running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+        replicas = running_replicas[len(running_replicas) - can_do:]
         
         self.env.metrics.log_load(fn_name, len(replicas))
         
@@ -410,21 +421,31 @@ class KSystem(FaasSystem):
             yield from replica.simulator.load_model(self.env, replica)
             replica.locked = False
     
-    def do_unload_model(self, fn_name: str, num_replica: int = 0):
-        # logger.debug(f'received request to unload model for {num_replica} replicas of {fn_name}')
-        replica_count = len(self.get_replicas(fn_name, AppState.LOADED_MODEL))
-        logger.debug(f'found {replica_count} replicas of {fn_name} in LOADED_MODEL state')
-        
-        if replica_count == 0:
-            logger.info(f'no replica to load model for {fn_name}')
+    def do_unload_model(self, fn_name: str, num_replica: int = 0):            
+        running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+        can_do = int(num_replica)
+        if can_do == 0:
             return
         
-        if replica_count <= num_replica:
-            num_replica = replica_count
-
-        logger.info(f'unload model for {num_replica} replica of {fn_name}')
+        if len(running_replicas) < can_do:
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
+                                                    interval=0.5, state=AppState.LOADED_MODEL, max_retry=60)
+            
         running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
-        replicas = running_replicas[len(running_replicas) - num_replica:]
+        if len(running_replicas) < can_do:
+            can_do = len(running_replicas)
+
+        scale_min = self.functions_deployments[fn_name].scaling_config.scale_min
+        if self.replica_count.get(fn_name, 0) - can_do < scale_min:
+            can_do = self.replica_count.get(fn_name, 0) - scale_min
+
+        if can_do == 0:
+            logger.info('Function %s wanted to unload model, but no replicas were unloaded', fn_name)
+            return
+
+        logger.info(f'unload model for {can_do} replica of {fn_name}')
+        running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+        replicas = running_replicas[len(running_replicas) - can_do:]
         
         self.env.metrics.log_unload(fn_name, len(replicas))
         for replica in replicas:
@@ -436,7 +457,7 @@ class KSystem(FaasSystem):
             
 def simulate_function_start(env: Environment, replica: KFunctionReplica):
     sim: FunctionSimulator = replica.simulator
-
+    replica.locked = True
     logger.debug('deploying function %s to %s', replica.function.name, replica.node.name)
     env.metrics.log_deploy(replica)
     yield from sim.deploy(env, replica)
@@ -448,6 +469,7 @@ def simulate_function_start(env: Environment, replica: KFunctionReplica):
     env.metrics.log_setup(replica)
     yield from sim.setup(env, replica)  # FIXME: this is really domain-specific startup
     env.metrics.log_finish_deploy(replica)
+    replica.locked = False
     
 class KRoundRobinLoadBalancer:
     env: Environment

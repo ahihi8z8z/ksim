@@ -2,7 +2,7 @@ from sim.core import Environment
 from sim.faas import FunctionContainer, SimulatorFactory, FunctionRequest, FunctionReplica, FunctionSimulator
 from sim import docker
 from ksim_env.utils.metrics import KFunctionResourceUsage
-from ksim_env.utils.system import AppState
+from ksim_env.utils.appstate import AppState
 
 import logging
 
@@ -100,7 +100,7 @@ class KFunctionSimulator(FunctionSimulator):
         replica.state = AppState.ACTIVING
         env.resource_state.put_resource(replica, 'cpu', self.service_profile[AppState.ACTIVING].cpu)
         env.resource_state.put_resource(replica, 'memory', self.service_profile[AppState.ACTIVING].ram)
-        yield env.timeout(np.random.exponential(scale=request.size))
+        yield env.timeout(request.size)
         env.resource_state.remove_resource(replica, 'cpu', self.service_profile[AppState.ACTIVING].cpu)
         env.resource_state.remove_resource(replica, 'memory', self.service_profile[AppState.ACTIVING].ram)
         

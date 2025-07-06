@@ -66,4 +66,35 @@ def build_interval_generator(request_array, period:int = 1440):
 
     return g
 
+def build_rpm(profile: pd.DataFrame, HashFunction: str, sim_duration: int) -> tuple:
+    data = profile[profile['HashFunction'].str.startswith(HashFunction)]
+    row = data.sample(n=1, random_state=42).iloc[0, 4:].values 
+    period = 1440
+    
+    if len(row) < sim_duration:
+        sim_duration = len(row)
+        
+    def randint_step(low, high, step):
+        num = (high - low) // step
+        return low + np.random.randint(0, num+1) * step
+    
+    # chọn lấy 1 ngày ngẫu nhiên
+    start = randint_step(0, len(row) - sim_duration + 1, period) 
+    start -= start % period
+    
+    # Nhân 10 lên mô phỏng vô hạn
+    rpm = np.tile(row[start : start + sim_duration], 10)
+    
+    # period = estimate_period(rpm)
+    return rpm, period, start//period 
+
+def azure_ia_generator(rpm, period: int):
+    ia_gen = build_interval_generator(rpm, period)
+    
+    t_now = 0.0 # phút
+    while t_now < len(rpm):
+        ia =  ia_gen(t_now)
+        t_now += ia
+        yield ia*60 # trả về theo đơn vị s
+
 
