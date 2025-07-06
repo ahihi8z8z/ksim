@@ -368,6 +368,9 @@ class KSystem(FaasSystem):
         replica.simulator = self.env.simulator_factory.create(self.env, fn)
         return replica
 
+    # TODO: Vấn đề của cách làm hiện tại là sẽ có những container bị chuyển trạng thái dở dang khi api muốn nhảy nhiều bước
+    # Cách fix hợp lý là logic chọn các relica để chuyển trạng thái nên do hàm change_state thực hiện.
+    # Các hàm chuyển trạng thái nhận list này và thực hiện hành động
     def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str):
         logger.info(f'Received request changing {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
         from_idx = self.states.index(from_state)
@@ -384,7 +387,6 @@ class KSystem(FaasSystem):
         else:
             for i in range(from_idx - 1, to_idx - 1, -1):
                 yield from self.backward_transitions[i](fn_name, num_replica)
-        logger.info(f'Changed {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
 
     def do_load_model(self, fn_name: str, num_replica: int = 0):
         # logger.debug(f'received request to load model for {num_replica} replicas of {fn_name}')
@@ -432,7 +434,11 @@ class KSystem(FaasSystem):
         running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
         if len(running_replicas) < can_do:
             can_do = len(running_replicas)
-            
+
+        scale_min = self.functions_deployments[fn_name].scaling_config.scale_min
+        if self.replica_count.get(fn_name, 0) - can_do < scale_min:
+            can_do = self.replica_count.get(fn_name, 0) - scale_min
+
         if can_do == 0:
             logger.info('Function %s wanted to unload model, but no replicas were unloaded', fn_name)
             return
