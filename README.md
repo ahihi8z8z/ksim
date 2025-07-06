@@ -14,7 +14,11 @@ Trong thư mục ksim, chạy các lệnh sau:
 ```{shell}
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+git clone https://github.com/edgerun/faas-sim.git
+cd faas-sim/
+python3 -m pip install .
+cd ..
+python3 -m pip install -r requirements.txt .
 ```
 
 ## Chạy 
