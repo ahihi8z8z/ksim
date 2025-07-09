@@ -82,7 +82,7 @@ class AverageFaasRequestScaler:
             starting_replicas = len(faas.get_replicas(self.fn.name, AppState.STARTING, False))
             starting_replicas += len(faas.get_replicas(self.fn.name, AppState.UNLOADED_MODEL, False))
             starting_replicas += len(faas.get_replicas(self.fn.name, AppState.LOADING_MODEL, False))
-
+            
             last_invocations = self.function_invocations.get(self.fn_name, 0)
             current_total_invocations = env.metrics.invocations.get(self.fn_name, 0)
             invocations = current_total_invocations - last_invocations

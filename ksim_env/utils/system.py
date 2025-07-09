@@ -48,6 +48,7 @@ class KSystem(FaasSystem):
         self.states = ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"]
         self.forward_transitions = [self.scale_up, self.do_load_model]
         self.backward_transitions = [self.scale_down, self.do_unload_model]
+
         
     def get_deployments(self) -> List[FunctionDeployment]:
         return list(self.functions_deployments.values())

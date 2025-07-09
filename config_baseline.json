@@ -1,9 +1,13 @@
 {
   "num_servers": 1,
   "random_init": false,
-  "main_states": ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"],
+  "main_states": [
+    "NULL",
+    "UNLOADED_MODEL",
+    "LOADED_MODEL"
+  ],
   "timeout": 1209600,
-  "max_episode_steps": 4032, 
+  "max_episode_steps": 4032,
   "step_size": 300,
   "scaler_config": {
     "scale_by_requests": false,
@@ -12,8 +16,8 @@
   },
   "services": {
     "747b9c0c8fe8e7fff": {
-      "req_profile_file": "/home/haipt/ksim/invocation.csv",
-      "exec_time_file": "/home/haipt/ksim/exec_time.csv",
+      "req_profile_file": "/home/thai/ken/ksim/invocation.csv",
+      "exec_time_file": "/home/thai/ken/ksim/exec_time.csv",
       "sim_duration": 336,
       "image_size": 200000000,
       "request_profit": 1,
@@ -21,7 +25,7 @@
       "trigger_type": "http",
       "scale_min": 1,
       "scale_max": 50,
-      "rps_threshold":  0.05,
+      "rps_threshold": 0.05,
       "alert_window": 120,
       "rps_threshold_duration": 120,
       "target_average_utilization": 0.5,
@@ -29,14 +33,70 @@
       "target_queue_length": 75,
       "target_average_rps_threshold": 0.1,
       "state_resource_usage": {
-        "NULL":        {"time": 0.0,  "ram": 0.0,   "cpu": 0.0,  "gpu": 0.0,  "disk": 0.0,  "network": 0.0},
-        "SUSPENDED":   {"time": 5.0,  "ram": 300000000.0, "cpu": 3000, "gpu": 0.0,  "disk": 2.0,  "network": 0.1},
-        "STARTING":    {"time": 5.0,  "ram": 300000000.0, "cpu": 3000,  "gpu": 0.0,  "disk": 10.0, "network": 0.5},
-        "UNLOADED_MODEL": {"time": 0.0, "ram": 200000000.0, "cpu": 2000, "gpu": 0.0, "disk": 8.0,  "network": 0.3},
-        "LOADING_MODEL":  {"time": 32.0, "ram": 500000000.0,"cpu": 5000, "gpu": 0.2, "disk": 12.0, "network": 1.0},
-        "LOADED_MODEL":   {"time": 0.0, "ram": 400000000.0, "cpu": 4000, "gpu": 0.1, "disk": 4.0,  "network": 0.2},
-        "UNLOADING_MODEL":{"time": 10.0, "ram": 500000000.0, "cpu": 5000, "gpu": 0.1, "disk": 6.0,  "network": 0.4},
-        "ACTIVING":       {"time": 0.0, "ram": 100000000.0, "cpu": 1000, "gpu": 0.3, "disk": 7.0,  "network": 0.6}
+        "NULL": {
+          "time": 0.0,
+          "ram": 0.0,
+          "cpu": 0.0,
+          "gpu": 0.0,
+          "disk": 0.0,
+          "network": 0.0
+        },
+        "SUSPENDED": {
+          "time": 5.0,
+          "ram": 300000000.0,
+          "cpu": 3000,
+          "gpu": 0.0,
+          "disk": 2.0,
+          "network": 0.1
+        },
+        "STARTING": {
+          "time": 5.0,
+          "ram": 300000000.0,
+          "cpu": 3000,
+          "gpu": 0.0,
+          "disk": 10.0,
+          "network": 0.5
+        },
+        "UNLOADED_MODEL": {
+          "time": 0.0,
+          "ram": 200000000.0,
+          "cpu": 2000,
+          "gpu": 0.0,
+          "disk": 8.0,
+          "network": 0.3
+        },
+        "LOADING_MODEL": {
+          "time": 32.0,
+          "ram": 500000000.0,
+          "cpu": 5000,
+          "gpu": 0.2,
+          "disk": 12.0,
+          "network": 1.0
+        },
+        "LOADED_MODEL": {
+          "time": 0.0,
+          "ram": 400000000.0,
+          "cpu": 4000,
+          "gpu": 0.1,
+          "disk": 4.0,
+          "network": 0.2
+        },
+        "UNLOADING_MODEL": {
+          "time": 10.0,
+          "ram": 500000000.0,
+          "cpu": 5000,
+          "gpu": 0.1,
+          "disk": 6.0,
+          "network": 0.4
+        },
+        "ACTIVING": {
+          "time": 0.0,
+          "ram": 100000000.0,
+          "cpu": 1000,
+          "gpu": 0.3,
+          "disk": 7.0,
+          "network": 0.6
+        }
       }
     }
   }

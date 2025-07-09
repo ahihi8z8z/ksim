@@ -21,6 +21,12 @@ from typing import Any, Dict
 import pandas as pd
 logger = logging.getLogger(__name__)
 
+class KEnvironment(Environment):
+    def __init__(self, initial_time=0):
+        super().__init__(initial_time)
+        self.energy_monitor = None
+    
+
 class KsimEnv(gym.Env):
     metadata: Dict[str, Any] = {"render_modes": ["plot"], "render_fps": 60}
     def __init__(self, render_dir: str, config_file: str = None):
@@ -119,7 +125,7 @@ class KsimEnv(gym.Env):
         
         benchmark = KBenchmark(service_configs=self.service_profile)
 
-        env = Environment()
+        env = KEnvironment()
         env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)))
         env.metrics_server = KMetricsServer()
         env.resource_monitor = KResourceMonitor(env, reconcile_interval=1, logging=False)

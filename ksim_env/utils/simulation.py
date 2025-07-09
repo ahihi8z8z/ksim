@@ -11,6 +11,7 @@ from sim.resource import ResourceState, ResourceMonitor
 from sim.skippy import SimulationClusterContext
 from sim.topology import Topology
 
+
 logger = logging.getLogger(__name__)
 
 class KSimulation:
@@ -45,6 +46,10 @@ class KSimulation:
 
         logger.info('starting faas system')
         env.faas.start()
+        
+        logger.info('starting energy monitor system')
+        env.energy_monitor = EnergyMonitor(env)
+        env.process(env.energy_monitor.run())
 
         logger.info('starting benchmark process')
         env.process(self.benchmark.run(env))
@@ -70,7 +75,7 @@ class KSimulation:
         
         if not env.container_registry:
             env.container_registry = self.create_container_registry()
-
+            
         # Others is default
         if not env.cluster:
             env.cluster = SimulationClusterContext(env)
@@ -93,3 +98,18 @@ class KSimulation:
         """
         logger.info('now: %s, running simulation for %d seconds', self.env.now, interval)
         self.env.run(until=self.env.now + interval)
+        
+class EnergyMonitor:
+    def __init__(self, env: Environment, reconile_interval: int = 1):
+        self.env = env
+        self.reconile_interval = reconile_interval
+        
+    def run(self):
+        faas = self.env.faas
+        
+        while True:
+            logger.critical('Monitoring energy')
+            if self.env.resource_state.node_resource_utilizations:
+                logger.critical(f"Total {self.env.node_states['server_1'].capacity.cpu_millis}")
+                logger.critical(f"Current using {self.env.resource_state.get_node_resource_utilization('server_1').total_utilization.get_resource('cpu')} at {self.env.now}")
+            yield self.env.timeout(self.reconile_interval)
