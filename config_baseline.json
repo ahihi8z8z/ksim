@@ -6,6 +6,10 @@
     "UNLOADED_MODEL",
     "LOADED_MODEL"
   ],
+  "power_config": {
+    "base": 0.4,
+    "max_power": 500
+  },
   "timeout": 1209600,
   "max_episode_steps": 4032,
   "step_size": 300,

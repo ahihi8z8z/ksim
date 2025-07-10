@@ -11,6 +11,8 @@ from sim.resource import ResourceState, ResourceMonitor
 from sim.skippy import SimulationClusterContext
 from sim.topology import Topology
 
+import json
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,8 @@ class KSimulation:
         env.faas.start()
         
         logger.info('starting energy monitor system')
-        env.energy_monitor = EnergyMonitor(env)
+        env.energy_monitor = EnergyMonitor(env, env.power_config)
+
         env.process(env.energy_monitor.run())
 
         logger.info('starting benchmark process')
@@ -100,16 +103,51 @@ class KSimulation:
         self.env.run(until=self.env.now + interval)
         
 class EnergyMonitor:
-    def __init__(self, env: Environment, reconile_interval: int = 1):
+    def __init__(self, env: Environment, power_config, reconile_interval: int = 1):
         self.env = env
         self.reconile_interval = reconile_interval
+        self.power_config = power_config
+        
+        self.power_list = []
+        self.avg_power = 0
         
     def run(self):
         faas = self.env.faas
+        env = self.env
         
         while True:
-            logger.critical('Monitoring energy')
-            if self.env.resource_state.node_resource_utilizations:
-                logger.critical(f"Total {self.env.node_states['server_1'].capacity.cpu_millis}")
-                logger.critical(f"Current using {self.env.resource_state.get_node_resource_utilization('server_1').total_utilization.get_resource('cpu')} at {self.env.now}")
+            current_energy = 0
+
+            for nodename in env.node_states:
+
+                if not env.resource_state.node_resource_utilizations or not env.resource_state.get_node_resource_utilization(nodename).total_utilization.get_resource('cpu'):
+                    continue
+
+                if env.resource_state.node_resource_utilizations:
+                    capacity = env.node_states[nodename].capacity.cpu_millis
+                    current_using = env.resource_state.get_node_resource_utilization(nodename).total_utilization.get_resource('cpu')
+                    
+                    base_power = self.power_config['base'] * self.power_config['max_power']
+                    usage = (self.power_config['max_power'] - base_power) * (current_using / capacity)
+
+                    current_energy += (base_power + usage)
+
+                    # logger.critical(f'Monitor E {capacity} | {current_using} | {current_energy}')
+
+            
+            self.power_list.append(current_energy)
+
+            if len(self.power_list) == 0:
+                continue
+
+            if len(self.power_list) == 1:
+                self.avg_power = current_energy / 2
+
+            if len(self.power_list) == 2:
+                self.avg_power = (sum(self.power_list) / 2)
+
+            if len(self.power_list) > 2:
+                self.power_list.pop(0)
+                self.avg_power = (sum(self.power_list) / 2)
+
             yield self.env.timeout(self.reconile_interval)

@@ -25,6 +25,7 @@ class KEnvironment(Environment):
     def __init__(self, initial_time=0):
         super().__init__(initial_time)
         self.energy_monitor = None
+        self.power_config = float
     
 
 class KsimEnv(gym.Env):
@@ -119,6 +120,8 @@ class KsimEnv(gym.Env):
             
         self._num_service = len(self.service_profile)
 
+        self.power_config = self.config.get("power_config")
+
     def _ksim_init(self):
         self.sim = None
         topology = cloud_topology(self.num_servers)
@@ -126,6 +129,8 @@ class KsimEnv(gym.Env):
         benchmark = KBenchmark(service_configs=self.service_profile)
 
         env = KEnvironment()
+        # env.energy_monitor= self.power_config
+        env.power_config = self.power_config
         env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)))
         env.metrics_server = KMetricsServer()
         env.resource_monitor = KResourceMonitor(env, reconcile_interval=1, logging=False)
