@@ -1,15 +1,19 @@
 import logging
 import time
+from typing import List, Tuple
 
 from skippy.core.scheduler import Scheduler
+from skippy.core.predicates import Predicate, PodFitsResourcesPred, CheckNodeLabelPresencePred
+from skippy.core.priorities import Priority, BalancedResourcePriority, LatencyAwareImageLocalityPriority, CapabilityPriority, DataLocalityPriority, LocalityTypePriority
 
 from sim.benchmark import Benchmark
 from sim.core import Environment, timeout_listener
 from sim.docker import ContainerRegistry
-
-from sim.resource import ResourceState, ResourceMonitor
+from sim.resource import ResourceState
 from sim.skippy import SimulationClusterContext
 from sim.topology import Topology
+
+from ksim_env.utils.scheduler import MostRequestedPriority
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +89,22 @@ class KSimulation:
         return ContainerRegistry()
 
     def create_scheduler(self, env):
-        return Scheduler(env.cluster)
+        default_predicates: List[Predicate] = [
+            PodFitsResourcesPred(),
+            CheckNodeLabelPresencePred(['data.skippy.io/storage'], False) 
+        ]
+
+        ## Ưu tiên xếp vào node nhiều tải để tiết kiệm power
+        default_priorities: List[Tuple[float, Priority]] = [(10.0, MostRequestedPriority()),
+                                                            (1.0, BalancedResourcePriority()),
+                                                            (1.0, LatencyAwareImageLocalityPriority()),
+                                                            (1.0, LocalityTypePriority()),
+                                                            (1.0, DataLocalityPriority()),
+                                                            (1.0, CapabilityPriority())]
+        return Scheduler(cluster_context=env.cluster, 
+                                 percentage_of_nodes_to_score=100, 
+                                 predicates=default_predicates,
+                                 priorities=default_priorities)
 
     def step(self, interval: int = 1):
         """

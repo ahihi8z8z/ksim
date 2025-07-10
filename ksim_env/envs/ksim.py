@@ -2,7 +2,6 @@ import logging
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-from typing import List, Tuple
 import json
 
 from ksim_env.utils.metrics import KMetrics, KFunctionResourceUsage
@@ -12,12 +11,6 @@ from ksim_env.utils.simulation import KSimulation
 from ksim_env.utils.system import KSystem, AppState, enum_to_str, str_to_enum
 from ksim_env.utils.monitor import KMetricsServer, KResourceMonitor
 from ksim_env.utils.custom_log import KRuntimeLogger
-from ksim_env.utils.scheduler import MostRequestedPriority
-
-from skippy.core.scheduler import Scheduler
-from skippy.core.predicates import Predicate, PodFitsResourcesPred, CheckNodeLabelPresencePred
-from skippy.core.priorities import Priority, BalancedResourcePriority, ResourcePriority, \
-    LatencyAwareImageLocalityPriority, CapabilityPriority, DataLocalityPriority, LocalityTypePriority
 
 from sim.logging import SimulatedClock
 from sim.core import Environment
@@ -129,24 +122,6 @@ class KsimEnv(gym.Env):
         benchmark = KBenchmark(service_configs=self.service_profile)
 
         env = Environment()
-        
-        
-        default_predicates: List[Predicate] = [
-            PodFitsResourcesPred(),
-            CheckNodeLabelPresencePred(['data.skippy.io/storage'], False) 
-        ]
-
-        ## Ưu tiên xếp vào node nhiều tải để tiết kiệm power
-        default_priorities: List[Tuple[float, Priority]] = [(10.0, MostRequestedPriority)
-                                                            (1.0, BalancedResourcePriority()),
-                                                            (1.0, LatencyAwareImageLocalityPriority()),
-                                                            (1.0, LocalityTypePriority()),
-                                                            (1.0, DataLocalityPriority()),
-                                                            (1.0, CapabilityPriority())]
-        env.scheduler =Scheduler(cluster_context=env.cluster, 
-                                 percentage_of_nodes_to_score=100, 
-                                 predicates=default_predicates,
-                                 priorities=default_priorities)
         
         env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)))
         env.metrics_server = KMetricsServer()

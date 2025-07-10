@@ -20,3 +20,9 @@ class MostRequestedPriority(ResourcePriority):
         avg_used = (used_cpu + used_mem) / 2
         score = int(avg_used * context.max_priority)
         return score
+    
+    @staticmethod
+    def fraction_of_capacity(requested: int, capacity: int) -> float:
+        if capacity == 0:
+            capacity = 1
+        return float(requested) / float(capacity)
