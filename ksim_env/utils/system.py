@@ -48,6 +48,8 @@ class KSystem(FaasSystem):
         self.states = ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"]
         self.forward_transitions = [self.scale_up, self.do_load_model]
         self.backward_transitions = [self.scale_down, self.do_unload_model]
+        self.active_nodes = set()
+        
         
     def get_deployments(self) -> List[FunctionDeployment]:
         return list(self.functions_deployments.values())
@@ -342,6 +344,7 @@ class KSystem(FaasSystem):
 
             replica.node = self.env.get_node_state(result.suggested_host.name)
             node = replica.node.skippy_node
+            self.active_nodes.add(node)
 
             env.metrics.log('allocation', {
                 'cpu': 1 - (node.allocatable.cpu_millis / node.capacity.cpu_millis),
@@ -454,6 +457,9 @@ class KSystem(FaasSystem):
         for replica in replicas:
             yield from replica.simulator.unload_model(self.env, replica)
             replica.locked = False
+            
+    def get_active_nodes(self):
+        return self.active_nodes
             
 def simulate_function_start(env: Environment, replica: KFunctionReplica):
     sim: FunctionSimulator = replica.simulator

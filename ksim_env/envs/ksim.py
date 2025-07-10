@@ -61,6 +61,7 @@ class KsimEnv(gym.Env):
         
         self._ram_usage_percent = 0
         self._cpu_usage_percent = 0
+        self._power_avg = 0
         self._exec_interval_over_step = 0
         self._scaler_latency_over_step = 0
         self._pod_latency_over_step = 0
@@ -70,10 +71,12 @@ class KsimEnv(gym.Env):
 
         self._cluster_cpu_total = 0
         self._cluster_ram_total = 0
+        self._power_max = 0
         
         for node in self.sim.env.cluster.list_nodes():
             self._cluster_cpu_total += node.capacity.cpu_millis
             self._cluster_ram_total += node.capacity.memory
+            self._power_max += 150
             
         self.env_id = str(uuid.uuid4())[:8]  # Short UUID
         logger.info(f"Init environment ID: {self.env_id}")
@@ -176,10 +179,12 @@ class KsimEnv(gym.Env):
         now = self.sim.env.now
         metrics = self.sim.env.metrics
         metrics_server = self.sim.env.metrics_server   
+        active_nodes = self.sim.env.faas.get_active_nodes()
         
         for service_id in self.service_profile.keys():
             self._ram_usage_percent = metrics_server.get_avg_ram_utilization_func(service_id, now-self.step_size, now)/self._cluster_ram_total
             self._cpu_usage_percent = metrics_server.get_avg_cpu_utilization_func(service_id, now-self.step_size, now)/self._cluster_cpu_total
+            self._power_avg = (90*len(active_nodes) + 60*self._cpu_usage_percent) / self._power_max
             
             now_request_drop = metrics.drop_count[service_id]
             now_request_out = metrics.request_out[service_id]
@@ -215,6 +220,7 @@ class KsimEnv(gym.Env):
             
             self.info['ram_util'] = self._ram_usage_percent
             self.info['cpu_util'] = self._cpu_usage_percent
+            self.info['power_util'] = self._power_avg
             self.info['request_out_over_step'] = self._request_out_over_step
             self.info['request_in_over_step'] = self._request_in_over_step
             self.info['request_drop_over_step'] = self._request_drop_over_step
@@ -231,21 +237,20 @@ class KsimEnv(gym.Env):
         reward = 0
         # Hướng tới cân bằng request latency, tỉ lệ drop và tài nguyên sử dụng
         for service_id, _ in self.service_profile.items():
-            # Không có request nào mới được phục vụ xong
+            if self._request_in_over_step == 0:
+                blocking_rate = 0
+            else:
+                blocking_rate = self._request_drop_over_step / self._request_in_over_step
+            
             if self._request_out_over_step == 0:
-                exec_rate = 0
+                latency = 0
             else:
-                exec_rate = self._exec_interval_over_step / (self._scaler_latency_over_step + self._pod_latency_over_step + self._exec_interval_over_step)
-            
-            # Không có request drop và không có request phục vụ xong
-            if self._request_drop_over_step + self._request_out_over_step == 0:
-                acceptance_rate = 0
-            else:
-                acceptance_rate = self._request_out_over_step/(self._request_out_over_step + self._request_drop_over_step)
+                # 4 là cold start time
+                latency = (self._pod_latency_over_step + self._scaler_latency_over_step)/(4*self._request_out_over_step)
                 
-            reward += 2 - (10*self._ram_usage_percent + 10*self._cpu_usage_percent) + exec_rate + acceptance_rate
+            reward += 3 - (blocking_rate + latency + self._power_avg)
             
-            logger.info(f"Service {service_id} - Reward: {reward}, Exec Rate: {exec_rate}, Acceptance Rate: {acceptance_rate}, RAM Usage: {self._ram_usage_percent}, CPU Usage: {self._cpu_usage_percent}")
+            logger.info(f"Service {service_id} - Reward: {reward}, Blocking Rate: {blocking_rate}, Latency/Rq: {latency}, Power: {self._power_avg}")
 
         return reward
 
