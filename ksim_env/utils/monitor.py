@@ -65,3 +65,7 @@ class KResourceMonitor:
                     if self.logging:
                         self.env.metrics.log_function_resource_utilization(replica, utilization)
                     self.metric_server.put(ResourceWindow(replica, utilization.list_resources(), now))
+                    # print(f'Resource ul {utilization}')
+                    # print(f'log_function_resource_utilization {self.env.metrics.log_function_resource_utilization(replica, utilization)}')
+                    # print(f'logging {self.logging}')
+                    # print(f'ResourceWindow {ResourceWindow(replica, utilization.list_resources(), now).resources}')
