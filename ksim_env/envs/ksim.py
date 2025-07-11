@@ -98,6 +98,7 @@ class KsimEnv(gym.Env):
         self.step_size = self.config.get("step_size")
         self.random_init =  self.config.get("random_init")
         self._max_episode_steps = self.config.get("max_episode_steps", 1440) 
+        self.server_cap = self.config.get("server_cap")
         
         self.service_profile = {}
         for service_id, sv_config in self.config.get("services").items():
@@ -117,7 +118,7 @@ class KsimEnv(gym.Env):
 
     def _ksim_init(self):
         self.sim = None
-        topology = cloud_topology(self.num_servers)
+        topology = cloud_topology(self.num_servers, self.server_cap)
         
         benchmark = KBenchmark(service_configs=self.service_profile)
 

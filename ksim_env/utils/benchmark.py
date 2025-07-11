@@ -1,11 +1,14 @@
 from sim.topology import Topology
 from sim.benchmark import Benchmark
 from sim.core import Environment
-from sim.faas import FunctionDeployment, Function, FunctionImage, FunctionContainer, FunctionRequest
+from sim.faas import FunctionDeployment, Function, FunctionImage, FunctionContainer,  \
+    FunctionRequest, KubernetesResourceConfiguration
 from sim import docker
 from ether.blocks.cells import Cloudlet, BusinessIsp
 from ksim_env.utils.traffic_gen import build_rpm, azure_ia_generator
 from ksim_env.utils.exectime_gen import build_et_df, azure_et_generator
+from ether.util import parse_size_string
+from ether.core import Capacity
 
 import simpy
 
@@ -15,14 +18,18 @@ import logging
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-        
-def cloud_topology(num_server: int) -> Topology:
+    
+def cloud_topology(num_server: int, server_cap) -> Topology:
     t = Topology()
     
     dc = Cloudlet(num_server, 1, backhaul=BusinessIsp())
+    cap = Capacity(cpu_millis=server_cap.get("cpu"), memory=parse_size_string(server_cap.get("ram")))
     dc.materialize(t)
+    for node in t.get_nodes():
+        node.capacity = cap
     
     t.init_docker_registry()
+        
     return t
 
 def function_trigger(env: Environment, deployment: FunctionDeployment, et_generator, ia_generator, max_requests=None):
@@ -80,7 +87,7 @@ class KBenchmark(Benchmark):
     def setup(self, env: Environment):
         containers: docker.ContainerRegistry = env.container_registry
         for service_id, config in self.service_configs.items():
-            image_size = config['image_size']
+            image_size = parse_size_string(config['image_size'])
             containers.put(docker.ImageProperties(f'{service_id}', image_size, arch='x86'))
 
         # log all the images in the container
@@ -105,6 +112,7 @@ class KBenchmark(Benchmark):
             
             # sim_duration tính theo phút nhưng trong config để là giờ cho dễ hiểu
             rpm, period, start_day = build_rpm(req_profile, HashFunction=service_id, sim_duration=sim_duration*60)
+            rpm = rpm*600
             ia_generator = azure_ia_generator(rpm, period)
             
             et_df = build_et_df(exectime_profile, service_id)
@@ -125,7 +133,9 @@ class KBenchmark(Benchmark):
             func = Function(f'{service_id}', fn_images=[image])
             
             # Run time
-            container = FunctionContainer(image)
+            resource_config = KubernetesResourceConfiguration.create_from_str(cpu=config.get("resources")["cpu"], 
+                                                                              memory=config.get("resources")["ram"])
+            container = FunctionContainer(image, resource_config)
             
             scaling_config = ScalingConfiguration()
             scaling_config.scale_min = config['scale_min']

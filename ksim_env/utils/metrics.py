@@ -1,6 +1,7 @@
 from sim.metrics import Metrics
 from collections import defaultdict
 from sim.faas import FunctionRequest, FunctionReplica
+from ether.util import parse_size_string
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,13 +14,13 @@ class KFunctionResourceUsage:
     disk: float = 0.0 # in bps
     network: float = 0.0 # in bps
 
-    def __init__(self, cpu: float, time: float, gpu: float, network: float, ram: float, disk: float):
+    def __init__(self, cpu: float, time: float, gpu: float, network: str, ram: str, disk: str):
         self.cpu = cpu
         self.time = time
         self.gpu = gpu
-        self.network = network
-        self.ram = ram
-        self.disk = disk
+        self.network = parse_size_string(network)
+        self.ram = parse_size_string(ram)
+        self.disk = parse_size_string(disk)
 
     def __len__(self):
         return 6

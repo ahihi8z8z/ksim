@@ -5,7 +5,7 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 
-name_prefix = "scale_by_average_requests_per_replica"
+name_prefix = "scale_by_requests"
 
 
 ksim_log_dir = f"logs/{name_prefix}/"
@@ -33,13 +33,22 @@ def split_into_chunks(data, window):
     return np.array([np.array(data[i:i+window]) for i in range(0, len(data), window)])
 
 def plot_request_details(request_details, log_dir: str = None):
+    pod_latency = []
+    scaler_latency = []
     latency = []
     exec_interval = []
 
     for service, request in request_details.items():
         for req_id, details in request.items():
-            if details.get('pod_latency', 0) + details.get('scaler_latency', 0) > 0:
-                latency.append(details.get('pod_latency', 0) + details.get('scaler_latency', 0))
+            l = 0
+            if details.get('pod_latency', 0) > 0:
+                l += details.get('pod_latency')
+                pod_latency.append(details.get('pod_latency'))
+            if details.get('scaler_latency', 0) > 0:
+                l += details.get('scaler_latency')
+                scaler_latency.append(details.get('scaler_latency', 0))
+            if l > 0:
+                latency.append(l)
             exec_interval.append(details.get('execution_time', 0))
 
     def compute_cdf(data):
@@ -48,7 +57,9 @@ def plot_request_details(request_details, log_dir: str = None):
         return data, cdf
 
     x1, y1 = compute_cdf(latency)
-
+    x2, y2 = compute_cdf(pod_latency)
+    x3, y3 = compute_cdf(scaler_latency)
+    
     fig, axs = plt.subplots(2, 1, figsize=(8, 12), sharex=False)
 
     axs[0].plot(x1, y1, label='Latency', color='tab:blue')
@@ -56,11 +67,15 @@ def plot_request_details(request_details, log_dir: str = None):
     axs[0].set_ylabel('CDF')
     axs[0].grid(True)
 
-    axs[1].hist(latency, bins=100, density=True, color='tab:green', edgecolor='black')
-    axs[1].set_title('PDF of Latency (100 bins)')
-    axs[1].set_xlabel('Latency (seconds)')
-    axs[1].set_ylabel('Density')
+    axs[1].plot(x2, y2, label='Pod Latency', color='tab:blue')
+    axs[1].set_title('CDF of Pod Latency')
+    axs[1].set_ylabel('CDF')
     axs[1].grid(True)
+
+    axs[2].plot(x3, y3, label='Scaler Latency', color='tab:blue')
+    axs[2].set_title('CDF of Scaler Latency')
+    axs[2].set_ylabel('CDF')
+    axs[2].grid(True)
 
     fig.tight_layout()
     fig.savefig(os.path.join(log_dir, f"latency.png"))
@@ -70,7 +85,7 @@ def plot_request_details(request_details, log_dir: str = None):
 def plot_logs(name_prefix, request_in, request_out, request_drop,
               ram_util, cpu_util,
               null, unloaded, loaded,
-              reward_list, latency):
+              reward_list, latency, power_util):
 
     os.makedirs(f"logs/{name_prefix}", exist_ok=True)
 
@@ -125,23 +140,23 @@ def plot_logs(name_prefix, request_in, request_out, request_drop,
     axs[0].set_ylabel("RAM Util (%)")
     axs[0].grid(True)
 
-    axs[1].plot(smooth_list(cpu_util, window=60))
-    axs[1].set_ylabel("CPU Util (%)")
+    axs[1].plot(smooth_list(power_util, window=60))
+    axs[1].set_ylabel("Power Util (%)")
     axs[1].set_xlabel("Time Step")
     axs[1].grid(True)
     
-    cpu_sum = rolling_sum(cpu_util, window=288)
+    cpu_sum = rolling_sum(ram_util, window=288)
     req_sum = rolling_sum(request_out, window=288)
 
     # Tránh chia cho 0
     cpu_per_request = [c / r if r != 0 else 0 for c, r in zip(cpu_sum, req_sum)]
 
     axs[2].plot(cpu_per_request)
-    axs[2].set_ylabel("CPU Util per request")
+    axs[2].set_ylabel("RAM Util per request")
     axs[2].set_xlabel("Time Step")
     axs[2].grid(True)
 
-    fig.suptitle("Smoothed RAM and CPU Utilization")
+    fig.suptitle("Smoothed RAM and Power Utilization")
     plt.tight_layout()
     plt.savefig(f"logs/{name_prefix}/resource_util.png")
     plt.close()
@@ -179,6 +194,7 @@ request_out = []
 request_drop = []
 ram_util = []
 cpu_util = []
+power_util = []
 reward_list = []
 null = []
 unloaded = []
@@ -193,11 +209,11 @@ while not truncated:
     request_drop.append(info['request_drop_over_step'])
     ram_util.append(info['ram_util'])
     cpu_util.append(info['cpu_util'])
+    power_util.append(info['power_util'])
     reward_list.append(reward)
     null.append(info['NULL'])
     unloaded.append(info['UNLOADED_MODEL'])
     loaded.append(info['LOADED_MODEL'])
-
 
 latency = plot_request_details(info["request_details"], f"logs/{name_prefix}")
 
@@ -212,6 +228,7 @@ plot_logs(
     unloaded=unloaded,
     loaded=loaded,
     reward_list=reward_list,
-    latency=latency
+    latency=latency,
+    power_util=power_util
 )
 

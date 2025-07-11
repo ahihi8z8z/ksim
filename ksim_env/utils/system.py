@@ -196,8 +196,8 @@ class KSystem(FaasSystem):
         
         running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
         if running_replicas < remove:
-            yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, interval=0.5, 
-                                                    state=AppState.UNLOADED_MODEL, max_retry=60)
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, interval=0.1, 
+                                                    state=AppState.UNLOADED_MODEL, max_retry=40)
             
         running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
 
@@ -401,7 +401,7 @@ class KSystem(FaasSystem):
         
         if len(running_replicas) < can_do:
             yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
-                                                    interval=0.5, state=AppState.UNLOADED_MODEL, max_retry=60)
+                                                    interval=0.1, state=AppState.UNLOADED_MODEL, max_retry=40)
             
         running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
         if len(running_replicas) < can_do:
@@ -432,7 +432,7 @@ class KSystem(FaasSystem):
         
         if len(running_replicas) < can_do:
             yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
-                                                    interval=0.5, state=AppState.LOADED_MODEL, max_retry=60)
+                                                    interval=0.1, state=AppState.LOADED_MODEL, max_retry=40)
             
         running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
         if len(running_replicas) < can_do:
@@ -473,7 +473,7 @@ def simulate_function_start(env: Environment, replica: KFunctionReplica):
 
     logger.debug('running function setup %s on %s', replica.function.name, replica.node.name)
     env.metrics.log_setup(replica)
-    yield from sim.setup(env, replica)  # FIXME: this is really domain-specific startup
+    yield from sim.setup(env, replica)  
     env.metrics.log_finish_deploy(replica)
     replica.locked = False
     
