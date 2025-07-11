@@ -68,6 +68,7 @@ Sau đó truy cập `http://{host ip}:6006/` để xem
 ## Cấu hình
 Vì môi trường gym chứa môi trường faas-sim, toàn bộ cấu hình của hai môi trường được truyền vào khi khởi tạo môi trường gym. Hiện tại bao gồm các cấu hình sau:
 - `num_servers`: số lượng server. Mỗi server là một skippy node của faas-sim với 88 CPU và 188 GB RAM.
+- `server_cap`: dung lượng server, có 2 giá trị là RAM và CPU. 
 - `random_init`: Nếu false, faas-sim sẽ khởi tạo với `scale_min` replica. Ngược lại, khởi tạo ngẫu nhin một số lượng replica. Mặc định là false.
 - `timeout`: Hết timeout thì môi trường gym và môi trường faas-sim sẽ dừng. Tính theo thời gian của môi trường faas-sim, đơn vị là giây, mặc định là 1209600 giây (14 ngày).
 - `max_episode_steps`: Hết `max_episode_steps` thì môi trường gym sẽ dừng. Tính theo số bước của môi trường gym.
@@ -80,8 +81,9 @@ Vì môi trường gym chứa môi trường faas-sim, toàn bộ cấu hình c�
     - `req_profile_file`: đường dẫn đến file csv chứa số lần gọi hàm của service tương ứng. File này bao gồm 4 + n cột. 4 cột đầu là metadata, n cột sau ứng với số lời gọi hàm trung bình mỗi phút. File này nên chỉ có 1 dòng duy nhất ứng với một service (nhiều dòng cũng được nhưng chưa test).
     - `exec_time_file`: đường dẫn đến file csv chứa đặc trưng thống kê của thời gian thực thi của service tương ứng. File này bao gồm 7 hàng, mỗi hàng là 1 ngày theo thứ tự trong dataset azure.
     - `sim_duration`: môi trường faas-sim sẽ lấy ngẫu nhiên một đoạn dài `sim_duration` trong dataset azure để mô phỏng traffic, ví dụ là 24 thì lấy ngẫu nhiên 1 ngày trong 14 ngày. Đơn vị là giờ, nên để chia hết cho 24. Nếu muốn hành vi xác định, để là 336 giờ (ứng với 14 ngày, lúc này môi trường faas-sim sẽ luôn bắt đầu từ ngày 1).
-    - `state_resource_usage`: Tài nguyên replica tiêu thụ tại từng trạng thái. Ví dụ `UNLOADED_MODEL` tiêu thụ 5 cpu thì một node có 10 replica ở `UNLOADED_MODEL` sẽ tiêu thụ 50 cpu. Chuyển sang `LOADED_MODEL` tiêu thụ 10 cpu thì sau khi chuyển node bị chiếm 100 cpu.  Riêng với `ACTIVING`, thì tài nguyên ở đây đại diện cho mỗi request đang được phục vụ. Lưu ý với các trạng thái có thể điều khiển, thời gian cần để là 0. Đơn vị thời gian là giây, đơn vị cpu là milisecond (chia 100 ra số core), đơn vị RAM là byte. 
+    - `state_resource_usage`: Tài nguyên replica tiêu thụ tại từng trạng thái. Ví dụ `UNLOADED_MODEL` tiêu thụ 5 cpu thì một node có 10 replica ở `UNLOADED_MODEL` sẽ tiêu thụ 50 cpu. Chuyển sang `LOADED_MODEL` tiêu thụ 10 cpu thì sau khi chuyển node bị chiếm 100 cpu.  Riêng với `ACTIVING`, thì tài nguyên ở đây đại diện cho mỗi request đang được phục vụ. Lưu ý với các trạng thái có thể điều khiển, thời gian cần để là 0. Đơn vị thời gian là giây, đơn vị cpu là milisecond (chia 1000 ra số core), ~~đơn vị RAM là byte~~ giờ RAM truyền vào dạng string theo đơn vị thông thường (K, M, G, Ki, Mi, Gi). 
     - `image_size`: kích thước image của service. Đơn vị là byte.
+    - `resources`: Tài nguyên container yêu cầu. Bao gồm RAM và CPU.
     - `num_workers`: số lượng request xử lý song song tại mỗi replica. Mặc định lả 1.
     - `scale_min`: số lượng replica `LOADED_MODEL` tối thiểu trong hệ thống.
     - `scale_max`: số lượng replica khác `NULL` tối đa trong hệ thống.
@@ -90,3 +92,14 @@ Vì môi trường gym chứa môi trường faas-sim, toàn bộ cấu hình c�
     - `alert_window`: tham số của thuật toán auto scale `scale_by_average_requests_per_replica`.
     - `target_average_rps`: tham số của thuật toán auto scale `scale_by_average_requests_per_replica`.
     - `target_queue_length`: tham số của thuật toán auto scale `scale_by_queue_requests_per_replica`.
+
+
+## Hướng dẫn train RL
+- Các tham số ảnh hưởng đến thời gian chạy:
+    - `n_envs`: số môi trường chạy song song, lý thuyết thì mỗi môi trường 1 core nhưng càng nhiều thì chạy càng lâu.
+    - `n_eval_episodes`: số episode mỗi lần evaluation
+    - `eval_freq`: bao nhiêu step thì evaluation 1 lần
+    - `total_timesteps`: tổng cộng train bao nhiêu step.
+- Với cấu hình hiện tại thì, chạy song song `8` môi trường. Với mỗi môi trường chạy được `72` steps thì evaluation `1` episode. Train tổng `228*14*30` step tương đương với mỗi môi trường train trong `14` tháng. 
+- Muốn train nhanh thì nên giảm các tham số trên, ưu tiên `total_timesteps`.
+- Muốn đổi traffic pattern thì đổi đường dẫn đến file trong config. Format file traffic thì xem mô tả trong phần cấu hình bên trên.

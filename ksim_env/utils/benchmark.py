@@ -112,7 +112,6 @@ class KBenchmark(Benchmark):
             
             # sim_duration tính theo phút nhưng trong config để là giờ cho dễ hiểu
             rpm, period, start_day = build_rpm(req_profile, HashFunction=service_id, sim_duration=sim_duration*60)
-            rpm = rpm*600
             ia_generator = azure_ia_generator(rpm, period)
             
             et_df = build_et_df(exectime_profile, service_id)
