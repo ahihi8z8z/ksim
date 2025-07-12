@@ -1,6 +1,7 @@
 {
   "num_servers": 10,
   "server_cap": {"cpu": 40000, "ram": "40Gi"},
+  "get_detail": false,
   "random_init": false,
   "main_states": ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"],
   "timeout": 1209600,

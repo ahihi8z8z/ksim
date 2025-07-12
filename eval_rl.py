@@ -41,14 +41,20 @@ def split_into_chunks(data, window):
     return np.array([np.array(data[i:i+window]) for i in range(0, len(data), window)])
 
 def plot_request_details(request_details, log_dir: str = None):
+    pod_latency = []
+    scaler_latency = []
     latency = []
     exec_interval = []
 
-    for service, request in request_details.items():
-        for req_id, details in request.items():
-            if details.get('pod_latency', 0) + details.get('scaler_latency', 0) > 0:
-                latency.append(details.get('pod_latency', 0) + details.get('scaler_latency', 0))
-            exec_interval.append(details.get('execution_time', 0))
+    for service, details in request_details.items():
+        pod_latency = details.get('pod_latency')
+        scaler_latency = details.get('scaler_latency')
+        latency = np.add(pod_latency, scaler_latency)
+        exec_interval = details.get('execution_time')
+        
+        pod_latency = [x for x in pod_latency if x != 0]
+        scaler_latency = [x for x in scaler_latency if x != 0]
+        latency = [x for x in latency if x != 0]
 
     def compute_cdf(data):
         data = np.sort(data)
@@ -56,7 +62,9 @@ def plot_request_details(request_details, log_dir: str = None):
         return data, cdf
 
     x1, y1 = compute_cdf(latency)
-
+    x2, y2 = compute_cdf(pod_latency)
+    x3, y3 = compute_cdf(scaler_latency)
+    
     fig, axs = plt.subplots(2, 1, figsize=(8, 12), sharex=False)
 
     axs[0].plot(x1, y1, label='Latency', color='tab:blue')
@@ -64,11 +72,15 @@ def plot_request_details(request_details, log_dir: str = None):
     axs[0].set_ylabel('CDF')
     axs[0].grid(True)
 
-    axs[1].hist(latency, bins=100, density=True, color='tab:green', edgecolor='black')
-    axs[1].set_title('PDF of Latency (100 bins)')
-    axs[1].set_xlabel('Latency (seconds)')
-    axs[1].set_ylabel('Density')
+    axs[1].plot(x2, y2, label='Pod Latency', color='tab:blue')
+    axs[1].set_title('CDF of Pod Latency')
+    axs[1].set_ylabel('CDF')
     axs[1].grid(True)
+
+    axs[2].plot(x3, y3, label='Scaler Latency', color='tab:blue')
+    axs[2].set_title('CDF of Scaler Latency')
+    axs[2].set_ylabel('CDF')
+    axs[2].grid(True)
 
     fig.tight_layout()
     fig.savefig(os.path.join(log_dir, f"latency.png"))

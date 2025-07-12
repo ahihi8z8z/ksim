@@ -1,6 +1,8 @@
 {
   "num_servers": 1,
   "random_init": false,
+  "server_cap": {"cpu": 40000, "ram": "40Gi"},
+  "get_detail": true,
   "main_states": ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"],
   "timeout": 1209600,
   "max_episode_steps": 4032, 

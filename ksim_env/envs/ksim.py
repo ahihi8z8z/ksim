@@ -99,6 +99,7 @@ class KsimEnv(gym.Env):
         self.random_init =  self.config.get("random_init")
         self._max_episode_steps = self.config.get("max_episode_steps", 1440) 
         self.server_cap = self.config.get("server_cap")
+        self.get_detail = self.config.get("get_detail")
         
         self.service_profile = {}
         for service_id, sv_config in self.config.get("services").items():
@@ -124,7 +125,7 @@ class KsimEnv(gym.Env):
 
         env = Environment()
         
-        env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)))
+        env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)), get_detail=self.get_detail)
         env.metrics_server = KMetricsServer()
         env.resource_monitor = KResourceMonitor(env, reconcile_interval=1, logging=False)
         if self.random_init:

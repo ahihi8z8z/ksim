@@ -38,18 +38,15 @@ def plot_request_details(request_details, log_dir: str = None):
     latency = []
     exec_interval = []
 
-    for service, request in request_details.items():
-        for req_id, details in request.items():
-            l = 0
-            if details.get('pod_latency', 0) > 0:
-                l += details.get('pod_latency')
-                pod_latency.append(details.get('pod_latency'))
-            if details.get('scaler_latency', 0) > 0:
-                l += details.get('scaler_latency')
-                scaler_latency.append(details.get('scaler_latency', 0))
-            if l > 0:
-                latency.append(l)
-            exec_interval.append(details.get('execution_time', 0))
+    for service, details in request_details.items():
+        pod_latency = details.get('pod_latency')
+        scaler_latency = details.get('scaler_latency')
+        latency = np.add(pod_latency, scaler_latency)
+        exec_interval = details.get('execution_time')
+        
+        pod_latency = [x for x in pod_latency if x != 0]
+        scaler_latency = [x for x in scaler_latency if x != 0]
+        latency = [x for x in latency if x != 0]
 
     def compute_cdf(data):
         data = np.sort(data)
