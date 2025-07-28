@@ -1,0 +1,31 @@
+{
+    "747b9c0c8fe8e7fff": {
+        "req_profile_file": "/home/haipt/ksim/invocation.csv",
+        "exec_time_file": "/home/haipt/ksim/exec_time.csv",
+        "resources": {"cpu": "8000m", "ram": "8Gi"},
+        "image_size": "4Gi",
+        "request_profit": 1,
+        "num_workers": 1,
+        "trigger_type": "http",
+        "scale_min": 1,
+        "scale_max": 50,
+        "rps_threshold":  0.05,
+        "alert_window": 120,
+        "rps_threshold_duration": 120,
+        "target_average_utilization": 0.5,
+        "target_average_rps": 2,
+        "target_queue_length": 75,
+        "target_average_rps_threshold": 0.1,
+        "state_resource_usage": {
+        "NULL":        {"time": 0.0,  "ram": "0Mi",   "cpu": 0,  "gpu": 0.0,  "disk": "0Mi",  "network": "0Mi"},
+        "SUSPENDED":   {"time": 2.0,  "ram": "800Mi", "cpu": 240, "gpu": 0.0,  "disk": "0Mi",  "network": "0Mi"},
+        "STARTING":    {"time": 2.0,  "ram": "800Mi", "cpu": 240,  "gpu": 0.0,  "disk": "0Mi", "network": "0Mi"},
+        "UNLOADED_MODEL": {"time": 0.0, "ram": "800Mi", "cpu": 80, "gpu": 0.0, "disk": "0Mi",  "network": "0Mi"},
+        "LOADING_MODEL":  {"time": 2.0, "ram": "1200Mi","cpu": 240, "gpu": 0.2, "disk": "0Mi", "network": "0Mi"},
+        "LOADED_MODEL":   {"time": 0.0, "ram": "1600Mi", "cpu": 80, "gpu": 0.1, "disk": "0Mi",  "network": "0Mi"},
+        "UNLOADING_MODEL":{"time": 2.0, "ram": "1200Mi", "cpu": 240, "gpu": 0.1, "disk": "0Mi",  "network": "0Mi"},
+        "ACTIVING":       {"time": 0.0, "ram": "0Mi", "cpu": 1760, "gpu": 0.3, "disk": "0Mi",  "network": "0Mi"}
+        }
+    }
+}
+

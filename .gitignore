@@ -177,3 +177,5 @@ pyrightconfig.json
 
 *tensorboard*/
 *logs*/
+*.csv
+*.json
