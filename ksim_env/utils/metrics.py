@@ -4,7 +4,7 @@ from sim.faas import FunctionRequest, FunctionReplica
 from ether.util import parse_size_string
 import logging
 
-logger = logging.getLogger(__name__)
+
 
 class KFunctionResourceUsage:
     time: float = 0.0 # in seconds. time bằng 0 có nghĩa là thời gian tồn tại trạng thái không xác định.
@@ -45,11 +45,10 @@ class KMetrics(Metrics):
     def __init__(self, env, log, get_detail) -> None:
         super().__init__(env, log)
         self.scaler_latency = defaultdict(float)
-        self.pod_latency = defaultdict(float)
-        self.exec_interval = defaultdict(float)
+        self.request_interval = defaultdict(float)
+        self.exec_duration = defaultdict(float)
         self.drop_count = defaultdict(int)
         self.request_in = defaultdict(int)
-        self.request_out = defaultdict(int)
         self.request_details = defaultdict(nested_dict)
         self.get_detail = get_detail
 
@@ -65,7 +64,7 @@ class KMetrics(Metrics):
         # mem = function.get_resource_requirements().get('memory')
         
         self.scaler_latency[request.name] +=  t_wait
-        if self.get_detail:
+        if self.get_detail and t_wait > 0:
             self.request_details[request.name]['scaler_latency'].append(t_wait)
 
         self.log('invocations', {'t_wait': t_wait, 't_exec': t_exec, 't_start': t_start, **kwargs},
@@ -76,24 +75,27 @@ class KMetrics(Metrics):
     def log_fet(self, function_name, function_image, node_name, t_fet_start, t_fet_end, replica_id, request_id,
                 **kwargs):
         execution_time = t_fet_end - t_fet_start
-        pod_latency = kwargs.get('t_wait_end') - kwargs.get('t_wait_start', t_fet_start)
-        self.exec_interval[function_name] += execution_time
-        self.pod_latency[function_name] += pod_latency
-        if self.get_detail:
-            self.request_details[function_name]['pod_latency'].append(pod_latency)
-            self.request_details[function_name]['execution_time'].append(execution_time)
+
+        self.exec_duration[function_name] += execution_time
         
         self.log('fets', {'t_fet_start': t_fet_start, 't_fet_end': t_fet_end, **kwargs},
-                 function_name=function_name,
-                 function_image=function_image, node=node_name, replica_id=replica_id, request_id=request_id)
+                function_name=function_name,
+                function_image=function_image, node=node_name, replica_id=replica_id, request_id=request_id)
         
     def log_drop(self, function_name, request_id):
         self.drop_count[function_name] += 1
         self.log('drop request', {'request_id': request_id}, function_name=function_name)
         
-    def log_request_in(self, function_name: str):
+    def log_request_in(self, function_name: str, request_interval: float):
         self.request_in[function_name] += 1
+        self.request_interval[function_name] += request_interval
         self.log('receive request', 1, function_name=function_name)
         
+    def log_start_exec(self, request: FunctionRequest, replica: FunctionReplica, **kwargs):
+        func_id = replica.function.name
+        self.invocations[func_id] += 1
+        self.total_invocations += 1
+        self.last_invocation[func_id] = self.env.now
+        
     def log_stop_exec(self, request: FunctionRequest, replica: FunctionReplica, **kwargs):
-        self.request_out[replica.function.name] += 1
+        pass

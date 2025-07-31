@@ -9,10 +9,11 @@ from sim.skippy import create_function_pod
 from sim.faas.core import FaasSystem
 
 from ksim_env.utils.scaler import FaasRequestScaler, AverageFaasRequestScaler, AverageQueueFaasRequestScaler, HorizontalPodAutoscaler
+from ksim_env.utils.loadbalancer import KRoundRobinLoadBalancer, LeastConnectionLoadBalancer
 from ksim_env.utils.replica import KFunctionReplica
 from ksim_env.utils.appstate import AppState
 
-logger = logging.getLogger(__name__)
+
 
 # This is the application state machine for the KSystem.
 # Mỗi trạng thái tiêu thụ một số lượng tài nguyên nhất định.
@@ -24,7 +25,7 @@ str_to_enum = {s.name: s.value for s in AppState}
 enum_to_str = {s.value: s.name for s in AppState}
     
 class KSystem(FaasSystem):
-    def __init__(self, env: Environment, scaler_config: Dict) -> None:
+    def __init__(self, env: Environment, scaler_config: Dict, lb: str, poll_config: Dict) -> None:
         self.env = env
         self.function_containers = dict()
         # collects all KFunctionReplicas under the name of the corresponding FunctionDeployment
@@ -34,7 +35,12 @@ class KSystem(FaasSystem):
         self.scheduler_queue = simpy.Store(env)
 
         # TODO let users inject LoadBalancer
-        self.load_balancer = KRoundRobinLoadBalancer(env, self.replicas)
+        if lb == "round_robin":
+            self.load_balancer = KRoundRobinLoadBalancer(env, self.replicas)
+        elif lb == "least_connection":
+            self.load_balancer = LeastConnectionLoadBalancer(env, self.replicas)
+        else:
+            raise ValueError(f"Unknown load balancer {lb}")
 
         self.functions_deployments: Dict[str, FunctionDeployment] = dict()
         self.replica_count: Dict[str, int] = dict()
@@ -44,6 +50,9 @@ class KSystem(FaasSystem):
         self.faas_scalers: Dict[str, FaasRequestScaler] = dict()
         self.avg_faas_scalers: Dict[str, AverageFaasRequestScaler] = dict()
         self.queue_faas_scalers: Dict[str, AverageQueueFaasRequestScaler] = dict()
+        
+        self.poll_interval = poll_config.get("poll_interval", 0.1)
+        self.max_poll_attempts = poll_config.get("max_poll_attempts", 40)
         
         self.states = ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"]
         self.forward_transitions = [self.scale_up, self.do_load_model]
@@ -77,7 +86,6 @@ class KSystem(FaasSystem):
         if need_locked:
             return [replica for replica in self.replicas[fn_name] if replica.state.value == state.value and replica.locked is False] 
         
-
         return [replica for replica in self.replicas[fn_name] if replica.state.value == state.value]
     
     # Lấy những replica có trạng thái cao/thấp hơn
@@ -116,11 +124,10 @@ class KSystem(FaasSystem):
         # TODO log metadata
         self.env.metrics.log_function_deployment(fd)
         self.env.metrics.log_function_deployment_lifecycle(fd, 'deploy')
-        logger.info('deploying function %s with scale_min=%d', fd.name, fd.scaling_config.scale_min)
-        yield from self.change_state(fd.name, fd.scaling_config.scale_min, "NULL", "LOADED_MODEL")  
-        
+        logging.info('deploying function %s with scale_min=%d', fd.name, fd.scaling_config.scale_min)
+        yield from self.change_state(fd.name, fd.scaling_config.scale_min, "NULL", "LOADED_MODEL")       
 
-    def deploy_replica(self, fd: FunctionDeployment, fn: FunctionContainer, services: List[FunctionContainer]):
+    def deploy_replica(self, fd: FunctionDeployment, fn: FunctionContainer, services: List[FunctionContainer], specific_replicas: List[KFunctionReplica] = None):
         """
         Creates and deploys a KFunctionReplica for the given FunctionContainer.
         In case no node supports the given FunctionContainer, the services list dictates which FunctionContainer to try next.
@@ -132,30 +139,42 @@ class KSystem(FaasSystem):
         self.env.metrics.log_function_replica(replica)
         yield self.scheduler_queue.put((replica, services))
 
+        retry = 0
+        # Hàm này sẽ đợi cho đến khi replica được chuyển sang trạng thái UNLOADED_MODEL
+        while retry < 30 and replica.state != AppState.UNLOADED_MODEL:
+            yield self.env.timeout(0.5)
+            retry += 1
+        
+        if replica.state != AppState.UNLOADED_MODEL:
+            self.replicas[fd.name].remove(replica)
+        elif specific_replicas is not None:
+            specific_replicas.append(replica)
+        
     def invoke(self, request: FunctionRequest):
         if request.name not in self.functions_deployments.keys():
-            logger.warning('invoking non-existing function %s', request.name)
+            logging.warning('invoking non-existing function %s', request.name)
             return
 
         t_received = self.env.now
 
-        replicas = self.get_replicas2(request.name, AppState.LOADED_MODEL, False)
+        replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
         if not replicas:
             retry = 0
-            while (len(self.get_replicas2(request.name, AppState.LOADED_MODEL, False)) < 1)  and (retry < 74):
-                yield self.env.timeout(0.5)
+            while (len(self.get_replicas(request.name, AppState.LOADED_MODEL)) < 1)  and (retry < self.max_poll_attempts):
+                yield self.env.timeout(self.poll_interval)
                 retry += 1
             
-        replicas = self.get_replicas2(request.name, AppState.LOADED_MODEL, False)
-        # Thử drop request sau 30s xem
+        replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
+        replicas = [replica for replica in replicas if len(replica.simulator.queue.queue) > 0]
+        
         if not replicas:
             self.env.metrics.log_drop(request.name, request.request_id)
             return
         
-        logger.debug('asking load balancer for replica for request %d', request.request_id)
+        # logging.debug('asking load balancer for replica for request %d', request.request_id)
         replica = self.next_replica(request)
 
-        logger.debug('dispatching request %s:%d to %s', request.name, request.request_id, replica.node.name)
+        logging.debug('dispatching request %s:%d to %s', request.name, request.request_id, replica.node.name)
 
         t_start = self.env.now
         
@@ -164,9 +183,11 @@ class KSystem(FaasSystem):
         self.env.metrics.log_stop_exec(request, replica)
 
         t_end = self.env.now
-
         t_wait = t_start - t_received
         t_exec = t_end - t_start
+        
+        replica.last_invocation = t_end
+        
         self.env.metrics.log_invocation(request, replica.image, replica.node.name, t_wait, t_start,
                                         t_exec, id(replica))
 
@@ -188,16 +209,44 @@ class KSystem(FaasSystem):
         for container in fn.fn_containers:
             del self.functions_definitions[container.image]
 
-    def scale_down(self, fn_name: str, remove: int):
+    def teardown_and_release(self, replica: KFunctionReplica):
+        node = replica.node.skippy_node
+
+        self.env.metrics.log_teardown(replica)
+        yield from replica.simulator.teardown(self.env, replica)
+
+        self.env.cluster.remove_pod_from_node(replica.pod, node)
+
+        self.env.metrics.log('allocation', {
+            'cpu': 1 - (node.allocatable.cpu_millis / node.capacity.cpu_millis),
+            'mem': 1 - (node.allocatable.memory / node.capacity.memory)
+        }, node=node.name)
+
+        self.replica_count[replica.fn_name] -= 1
+        self.functions_definitions[replica.image] -= 1
+
+    def scale_down(self, fn_name: str, remove: int, specific_replicas: List[KFunctionReplica] = None):
         env = self.env
+        
+        if specific_replicas is not None:
+            logging.info(f'scaling down {fn_name} by {len(specific_replicas)}')
+            env.metrics.log_scaling(fn_name, -can_remove)
+            
+            teardown_procs = [
+                env.process(self.teardown_and_release(replica))
+                for replica in specific_replicas
+            ]
+
+            yield env.all_of(teardown_procs)
+            return
+
         can_remove = int(remove)
         if can_remove <= 0:
             return
         
         running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
         if running_replicas < remove:
-            yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, interval=0.1, 
-                                                    state=AppState.UNLOADED_MODEL, max_retry=40)
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, state=AppState.UNLOADED_MODEL)
             
         running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
 
@@ -209,32 +258,20 @@ class KSystem(FaasSystem):
             can_remove = self.replica_count.get(fn_name, 0) - scale_min
 
         if can_remove <= 0:
-            logger.debug('Function %s wanted to scale down, but no replicas were removed', fn_name)
+            logging.debug('Function %s wanted to scale down, but no replicas were removed', fn_name)
             return
 
-        logger.info(f'scaling down {fn_name} by {can_remove}')
+        logging.info(f'scaling down {fn_name} by {can_remove}')
         
         replicas = self.choose_replicas_to_remove(fn_name, can_remove)
-        self.env.metrics.log_scaling(fn_name, -can_remove)
+        env.metrics.log_scaling(fn_name, -can_remove)
         
-        for replica in replicas:
-            replica.locked = True
-        
-        for replica in replicas:
-            node = replica.node.skippy_node
+        teardown_procs = [
+            env.process(self.teardown_and_release(replica))
+            for replica in replicas
+        ]
 
-            env.metrics.log_teardown(replica)
-            yield from replica.simulator.teardown(env, replica)
-
-            self.env.cluster.remove_pod_from_node(replica.pod, node)
-
-
-            env.metrics.log('allocation', {
-                'cpu': 1 - (node.allocatable.cpu_millis / node.capacity.cpu_millis),
-                'mem': 1 - (node.allocatable.memory / node.capacity.memory)
-            }, node=node.name)
-            self.replica_count[replica.fn_name] -= 1
-            self.functions_definitions[replica.image] -= 1
+        yield env.all_of(teardown_procs)
 
     def choose_replicas_to_remove(self, fn_name: str, n: int):
         # TODO: không scale down các replica đang có request
@@ -242,8 +279,8 @@ class KSystem(FaasSystem):
         return running_replicas[len(running_replicas) - n:]
 
 
-    def scale_up(self, fn_name: str, replicas: int):
-        logger.debug('request to scale up function %s by %d replicas', fn_name, replicas)
+    def scale_up(self, fn_name: str, replicas: int, specific_replicas: List[KFunctionReplica] = None):
+        logging.debug('request to scale up function %s by %d replicas', fn_name, replicas)
         fd = self.functions_deployments[fn_name]
         config = fd.scaling_config
         ranking = fd.ranking
@@ -253,7 +290,7 @@ class KSystem(FaasSystem):
             self.replica_count[fn_name] = 0
 
         if self.replica_count[fn_name] >= config.scale_max:
-            logger.debug('Function %s wanted to scale up, but maximum number of replicas reached', fn_name)
+            logging.debug('Function %s wanted to scale up, but maximum number of replicas reached', fn_name)
             return
 
         # check whether request would exceed maximum number of containers for the function and reduce to scale to max
@@ -262,10 +299,9 @@ class KSystem(FaasSystem):
             scale = replicas - reduce
 
         if scale == 0:
-            logger.debug('Function %s wanted to scale up, but no new replicas were requested', fn_name)
+            logging.debug('Function %s wanted to scale up, but no new replicas were requested', fn_name)
             return
         
-        actually_scaled = 0
         for index, service in enumerate(fd.get_services()):
             # check whether service has capacity, otherwise continue
             leftover_scale = scale
@@ -282,17 +318,16 @@ class KSystem(FaasSystem):
                     continue
                 leftover_scale = leftover_scale - reduce
             if leftover_scale > 0:
-                for _ in range(leftover_scale):
-                    yield from self.deploy_replica(fd, fd.get_container(service.image), fd.get_containers()[index:])
-                    actually_scaled += 1
-                    scale -= 1
+                procs = [self.env.process(self.deploy_replica(fd, fd.get_container(service.image), fd.get_containers()[index:], specific_replicas))
+                        for _ in range(leftover_scale)]
+                yield self.env.all_of(procs)
 
-        self.env.metrics.log_scaling(fd.name, actually_scaled)
+        self.env.metrics.log_scaling(fd.name, leftover_scale)
 
-        if scale > 0:
-            logger.debug("Function %s wanted to scale, but not all requested replicas were deployed: %s", fn_name,
-                        str(scale))
-
+        # if scale > 0:
+        #     logging.debug("Function %s wanted to scale, but not all requested replicas were deployed: %s", fn_name,
+        #                 str(scale))
+    
     def next_replica(self, request) -> KFunctionReplica:
         return self.load_balancer.next_replica(request)
 
@@ -301,11 +336,11 @@ class KSystem(FaasSystem):
             self.env.process(process(self.env))
         self.env.process(self.run_scheduler_worker())
 
-    def poll_available_replica(self, fn: str, num_entry: int = 1,  interval:float = 0.5, state:AppState = AppState.LOADED_MODEL, max_retry:int = 60):
+    def poll_available_replica(self, fn: str, num_entry: int = 1, state:AppState = AppState.LOADED_MODEL):
         retry = 0
         # Ta cần lấy các replica đang không bị lock
-        while (len(self.get_replicas(fn, state)) < num_entry)  and (retry < max_retry):
-            yield self.env.timeout(interval)
+        while (len(self.get_replicas(fn, state)) < num_entry)  and (retry < self.max_poll_attempts):
+            yield self.env.timeout(self.max_poll_attempts)
             retry += 1
 
     def run_scheduler_worker(self):
@@ -315,7 +350,7 @@ class KSystem(FaasSystem):
             replica: KFunctionReplica
             replica, services = yield self.scheduler_queue.get()
 
-            logger.debug('scheduling next replica %s', replica.function.name)
+            logging.debug('scheduling next replica %s', replica.function.name)
 
             # schedule the required pod
             self.env.metrics.log_start_schedule(replica)
@@ -327,20 +362,20 @@ class KSystem(FaasSystem):
 
             # yield env.timeout(duration)  # include scheduling latency in simulation time
 
-            # if logger.isEnabledFor(logging.DEBUG):
-            #     logger.debug('Pod scheduling took %.2f ms, and yielded %s', duration * 1000, result)
+            # if logging.isEnabledFor(logging.DEBUG):
+            #     logging.debug('Pod scheduling took %.2f ms, and yielded %s', duration * 1000, result)
 
             if not result.suggested_host:
                 self.replicas[replica.fn_name].remove(replica)
                 if len(services) > 0:
-                    logger.warning('retry scheduling pod %s', pod.name)
+                    logging.warning('retry scheduling pod %s', pod.name)
                     yield from self.deploy_replica(replica.function, services[0], services[1:])
                 else:
-                    logger.error('pod %s cannot be scheduled', pod.name)
+                    logging.error('pod %s cannot be scheduled', pod.name)
 
                 continue
 
-            logger.info('pod %s was scheduled to %s', pod.name, result.suggested_host)
+            logging.info('pod %s was scheduled to %s', pod.name, result.suggested_host)
 
             replica.node = self.env.get_node_state(result.suggested_host.name)
             node = replica.node.skippy_node
@@ -368,14 +403,15 @@ class KSystem(FaasSystem):
         replica.container = fn
         replica.pod = self.create_pod(fd, fn)
         replica.locked = False
+        replica.last_invocation = 0
         replica.simulator = self.env.simulator_factory.create(self.env, fn)
         return replica
 
     # TODO: Vấn đề của cách làm hiện tại là sẽ có những container bị chuyển trạng thái dở dang khi api muốn nhảy nhiều bước
     # Cách fix hợp lý là logic chọn các relica để chuyển trạng thái nên do hàm change_state thực hiện.
     # Các hàm chuyển trạng thái nhận list này và thực hiện hành động
-    def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str):
-        logger.info(f'Received request changing {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
+    def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str, version2: True, specific_replicas: List[KFunctionReplica] = None):
+        logging.info(f'Received request changing {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
         from_idx = self.states.index(from_state)
         to_idx = self.states.index(to_state)
         if from_idx < 0 or to_idx < 0:
@@ -383,56 +419,132 @@ class KSystem(FaasSystem):
         if from_idx == to_idx:
             return
         
+        if version2 and specific_replicas is None:
+            if from_state == "NULL":
+                specific_replicas = []
+                
+            elif from_state == "UNLOADED_MODEL" and to_state == "LOADED_MODEL":
+                can_do = int(num_replica)
+                if can_do == 0:
+                    return
+                running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+                if len(running_replicas) < can_do:
+                    yield from self.poll_available_replica(fn=fn_name, num_entry=can_do, state=AppState.UNLOADED_MODEL)
+                running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+                if len(running_replicas) < can_do:
+                    can_do = len(running_replicas)
+                if can_do == 0:
+                    logging.warning('Function %s wanted to load model, but no replicas were loaded', fn_name)
+                    return
+
+                running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+                specific_replicas = running_replicas[len(running_replicas) - can_do:]
+                
+            elif from_state == "LOADED_MODEL" and to_state == "UNLOADED_MODEL":
+                can_do = int(num_replica)
+                if can_do == 0:
+                    return
+                running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+                if len(running_replicas) < can_do:
+                    yield from self.poll_available_replica(fn=fn_name, num_entry=can_do, state=AppState.LOADED_MODEL)
+                running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+                if len(running_replicas) < can_do:
+                    can_do = len(running_replicas)
+                scale_min = self.functions_deployments[fn_name].scaling_config.scale_min
+                if self.replica_count.get(fn_name, 0) - can_do < scale_min:
+                    can_do = self.replica_count.get(fn_name, 0) - scale_min
+                if can_do == 0:
+                    logging.warning('Function %s wanted to unload model, but no replicas were unloaded', fn_name)
+                    return
+
+                running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+                specific_replicas = running_replicas[len(running_replicas) - can_do:]   
+
+            elif from_state == "UNLOADED_MODEL" and to_state == "NULL":
+                can_remove = int(num_replica)
+                if can_remove <= 0:
+                    return
+                
+                running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
+                if running_replicas < num_replica:
+                    yield from self.poll_available_replica(fn=fn_name, num_entry=can_remove, state=AppState.UNLOADED_MODEL)
+                    
+                running_replicas = len(self.get_replicas(fn_name, AppState.UNLOADED_MODEL))
+                if running_replicas < num_replica:
+                    can_remove = running_replicas
+
+                scale_min = self.functions_deployments[fn_name].scaling_config.scale_min
+                if self.replica_count.get(fn_name, 0) - can_remove < scale_min:
+                    can_remove = self.replica_count.get(fn_name, 0) - scale_min
+
+                if can_remove <= 0:
+                    logging.warning('Function %s wanted to scale down, but no replicas were removed', fn_name)
+                    return
+                specific_replicas = self.choose_replicas_to_remove(fn_name, can_remove)
+
+            
         if from_idx < to_idx:
             for i in range(from_idx, to_idx):
-                yield from self.forward_transitions[i](fn_name, num_replica)
-                
+                yield from self.forward_transitions[i](fn_name, num_replica, specific_replicas)
         else:
             for i in range(from_idx - 1, to_idx - 1, -1):
-                yield from self.backward_transitions[i](fn_name, num_replica)
+                yield from self.backward_transitions[i](fn_name, num_replica, specific_replicas)
 
-    def do_load_model(self, fn_name: str, num_replica: int = 0):
-        # logger.debug(f'received request to load model for {num_replica} replicas of {fn_name}')
-        running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
+    def do_load_model(self, fn_name: str, num_replica: int = 0, specific_replicas: List[KFunctionReplica] = None):
+        # logging.debug(f'received request to load model for {num_replica} replicas of {fn_name}')
+        if specific_replicas is not None:
+            logging.info(f'loading model for {len(specific_replicas)} specific replicas of {fn_name}')
+            self.env.metrics.log_load(fn_name, len(specific_replicas))
+            procs = [self.env.process(replica.simulator.load_model(self.env, replica))
+                    for replica in specific_replicas]
+            yield self.env.all_of(procs)
+            return
+    
         can_do = int(num_replica)
-        
         if can_do == 0:
             return
         
+        running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
         if len(running_replicas) < can_do:
-            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
-                                                    interval=0.1, state=AppState.UNLOADED_MODEL, max_retry=40)
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do, state=AppState.UNLOADED_MODEL)
             
         running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
         if len(running_replicas) < can_do:
             can_do = len(running_replicas)
             
         if can_do == 0:
-            logger.info('Function %s wanted to load model, but no replicas were loaded', fn_name)
+            logging.info('Function %s wanted to load model, but no replicas were loaded', fn_name)
             return
         
-        logger.info(f'loading model for {can_do} replica of {fn_name}')
+        logging.info(f'loading model for {can_do} replica of {fn_name}')
         running_replicas = self.get_replicas(fn_name, AppState.UNLOADED_MODEL)
         replicas = running_replicas[len(running_replicas) - can_do:]
         
         self.env.metrics.log_load(fn_name, len(replicas))
         
-        for replica in replicas:
-            replica.locked = True
-            
-        for replica in replicas:
-            yield from replica.simulator.load_model(self.env, replica)
-            replica.locked = False
+        procs = [self.env.process(replica.simulator.load_model(self.env, replica))
+                for replica in replicas]
+        yield self.env.all_of(procs)
+        
+        # for replica in replicas:
+            # yield from replica.simulator.load_model(self.env, replica)
     
-    def do_unload_model(self, fn_name: str, num_replica: int = 0):            
-        running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
+    def do_unload_model(self, fn_name: str, num_replica: int = 0, specific_replicas: List[KFunctionReplica] = None):
+        if specific_replicas is not None:
+            logging.info(f'unloading model for {len(specific_replicas)} specific replicas of {fn_name}')
+            self.env.metrics.log_unload(fn_name, len(specific_replicas))
+            procs = [self.env.process(replica.simulator.unload_model(self.env, replica))
+                    for replica in specific_replicas]
+            yield self.env.all_of(procs)
+            return
+                    
         can_do = int(num_replica)
         if can_do == 0:
             return
         
+        running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
         if len(running_replicas) < can_do:
-            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do,
-                                                    interval=0.1, state=AppState.LOADED_MODEL, max_retry=40)
+            yield from self.poll_available_replica(fn=fn_name, num_entry=can_do, state=AppState.LOADED_MODEL)
             
         running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
         if len(running_replicas) < can_do:
@@ -443,58 +555,36 @@ class KSystem(FaasSystem):
             can_do = self.replica_count.get(fn_name, 0) - scale_min
 
         if can_do == 0:
-            logger.info('Function %s wanted to unload model, but no replicas were unloaded', fn_name)
+            logging.info('Function %s wanted to unload model, but no replicas were unloaded', fn_name)
             return
 
-        logger.info(f'unload model for {can_do} replica of {fn_name}')
+        logging.info(f'unload model for {can_do} replica of {fn_name}')
         running_replicas = self.get_replicas(fn_name, AppState.LOADED_MODEL)
         replicas = running_replicas[len(running_replicas) - can_do:]
         
         self.env.metrics.log_unload(fn_name, len(replicas))
-        for replica in replicas:
-            replica.locked = True
             
-        for replica in replicas:
-            yield from replica.simulator.unload_model(self.env, replica)
-            replica.locked = False
+        procs = [self.env.process(replica.simulator.unload_model(self.env, replica))
+                for replica in replicas]
+        yield self.env.all_of(procs)
+        
+        # for replica in replicas:
+        #     yield from replica.simulator.unload_model(self.env, replica)
+
             
     def get_active_nodes(self):
         return self.active_nodes
             
 def simulate_function_start(env: Environment, replica: KFunctionReplica):
     sim: FunctionSimulator = replica.simulator
-    replica.locked = True
-    logger.debug('deploying function %s to %s', replica.function.name, replica.node.name)
+    logging.debug('deploying function %s to %s', replica.function.name, replica.node.name)
     env.metrics.log_deploy(replica)
     yield from sim.deploy(env, replica)
     env.metrics.log_startup(replica)
-    logger.debug('starting function %s on %s', replica.function.name, replica.node.name)
+    # logging.debug('starting function %s on %s', replica.function.name, replica.node.name)
     yield from sim.startup(env, replica)
 
-    logger.debug('running function setup %s on %s', replica.function.name, replica.node.name)
+    # logging.debug('running function setup %s on %s', replica.function.name, replica.node.name)
     env.metrics.log_setup(replica)
     yield from sim.setup(env, replica)  
     env.metrics.log_finish_deploy(replica)
-    replica.locked = False
-    
-class KRoundRobinLoadBalancer:
-    env: Environment
-    replicas: Dict[str, List[KFunctionReplica]]
-
-    def __init__(self, env, replicas) -> None:
-        super().__init__()
-        self.env = env
-        self.replicas = replicas
-        self.counters = defaultdict(lambda: 0)
-
-    def get_running_replicas(self, function: str):
-        return [replica for replica in self.replicas[function] if replica.state.value >= AppState.LOADED_MODEL.value]
-
-    def next_replica(self, request: FunctionRequest) -> KFunctionReplica:
-        replicas = self.get_running_replicas(request.name)
-        i = self.counters[request.name] % len(replicas)
-        self.counters[request.name] = (i + 1) % len(replicas)
-
-        replica = replicas[i]
-
-        return replica

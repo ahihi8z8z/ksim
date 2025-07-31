@@ -62,8 +62,10 @@ Sau đó truy cập `http://{host ip}:6006/` để xem
     - `do_unload_model`: chuyển replica ở `LOADED_MODEL` sang `UNLOADED_MODEL`.
     - `scale down`: xóa các replica ở trạng thái `UNLOADED_MODEL`. Bị giới hạn bởi cấu hình `scale_min` (xem phần cấu hình).
 - Vị trí đặt replica mới dựa theo [scheduler mặc định của faas-sim](https://github.com/edgerun/skippy-core/blob/754b20b0d5a3ee597d17682ef555ea1bf1340ea5/skippy/core/scheduler.py).
-- Khi traffic được đẩy vào (faas.invoke()), hệ thống tìm các replica ở trạng thái LOADED_MODEL hoặc ACTIVING để chuyển tiếp. Nếu không có replica nào ở 2 trạng thái trên thì hệ thống polling để tìm mỗi 0.5s, tối đa 37s. Quá 37s không có thì request bị drop. Nếu có nhiều hơn một replica ở các trạng thái trên, load balancer reqest theo round robin (xem KRoundRobinLoadBalancer).
-- Khi request đến replica, nếu replica đang bận phục vụ reqest khác, nó được xếp vào queue và đợi vô hạn cho tới khi đến lượt được phục vụ. Mỗi replica chỉ phục vụ một request tại một thời điểm, có thể sửa hành vi này qua cấu hình (xem phần cấu hình). 
+- ~~Khi traffic được đẩy vào (faas.invoke()), hệ thống tìm các replica ở trạng thái LOADED_MODEL hoặc ACTIVING để chuyển tiếp. Nếu không có replica nào ở 2 trạng thái trên thì hệ thống polling để tìm mỗi 0.5s, tối đa 37s. Quá 37s không có thì request bị drop. Nếu có nhiều hơn một replica ở các trạng thái trên, load balancer reqest theo round robin (xem KRoundRobinLoadBalancer)~~. 
+- ~~Khi request đến replica, nếu replica đang bận phục vụ reqest khác, nó được xếp vào queue và đợi vô hạn cho tới khi đến lượt được phục vụ. Mỗi replica chỉ phục vụ một request tại một thời điểm, có thể sửa hành vi này qua cấu hình (xem phần cấu hình)~~.
+- Giờ hệ thống chỉ đẩy request đến các container ở trạng thái LOADED_MODEL. Polling interval và max retry cấu hình từ file.
+
 
 ## Cấu hình
 Vì môi trường gym chứa môi trường faas-sim, toàn bộ cấu hình của hai môi trường được truyền vào khi khởi tạo môi trường gym. Hiện tại bao gồm các cấu hình sau:

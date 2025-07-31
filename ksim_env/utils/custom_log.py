@@ -2,7 +2,7 @@ from sim.logging import RuntimeLogger, Record
 
 import logging
 
-logger = logging.getLogger(__name__)
+
 
 class KRuntimeLogger(RuntimeLogger):
     def __init__(self, clock=None) -> None:

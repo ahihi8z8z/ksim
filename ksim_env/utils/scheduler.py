@@ -3,7 +3,7 @@ from skippy.core.clustercontext import ClusterContext
 from skippy.core.priorities import ResourcePriority
 from skippy.core.model import Capacity
 
-logger = logging.getLogger(__name__)
+
 
 
 class MostRequestedPriority(ResourcePriority):

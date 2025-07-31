@@ -6,7 +6,7 @@ from sim.faas import FunctionDeployment, Function, FunctionImage, FunctionContai
 from sim import docker
 from ether.blocks.cells import Cloudlet, BusinessIsp
 from ksim_env.utils.traffic_gen import build_rpm, azure_ia_generator
-from ksim_env.utils.exectime_gen import build_et_df, azure_et_generator
+from ksim_env.utils.exectime_gen import build_et_df, azure_et_generator, deterministic_et_generator
 from ether.util import parse_size_string
 from ether.core import Capacity
 
@@ -17,7 +17,7 @@ import numpy as np
 import logging
 from typing import List, Dict
 
-logger = logging.getLogger(__name__)
+
     
 def cloud_topology(num_server: int, server_cap) -> Topology:
     t = Topology()
@@ -38,13 +38,13 @@ def function_trigger(env: Environment, deployment: FunctionDeployment, et_genera
             while True:
                 ia = next(ia_generator)
                 yield env.timeout(ia)
-                env.metrics.log_request_in(deployment.fn.name)
+                env.metrics.log_request_in(deployment.fn.name, ia)
                 env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=et_generator())))
         else:
             for _ in range(max_requests):
                 ia = next(ia_generator)
                 yield env.timeout(ia)
-                env.metrics.log_request_in(deployment.fn.name)
+                env.metrics.log_request_in(deployment.fn.name, ia)
                 env.process(env.faas.invoke(FunctionRequest(name=deployment.name, size=et_generator())))
 
     except simpy.Interrupt:
@@ -93,8 +93,33 @@ class KBenchmark(Benchmark):
         # log all the images in the container
         for name, tag_dict in containers.images.items():
             for tag, images in tag_dict.items():
-                logger.info('%s, %s, %s', name, tag, images)
+                logging.info('%s, %s, %s', name, tag, images)
+                
+    def prepare_invocation_profile(self, service_id):
+        invocation_profile = self.service_configs[service_id]['invocation_profile']
+        if invocation_profile['type'] == 'file':
+            random_start = self.service_configs[service_id].get('random_start')
+            profile = pd.read_csv(invocation_profile['value'])
+            rpm, period, start_day = build_rpm(profile, service_id, random_start)
+            ia_generator = azure_ia_generator(rpm, period)
+            return ia_generator, start_day 
+        else:
+            raise ValueError(f"Unsupported invocation profile type: {invocation_profile['type']} for service {service_id}")
 
+    def prepare_execution_time_profile(self, service_id, start_day):
+        exec_time_profile = self.service_configs[service_id]['exec_time_profile']
+        if exec_time_profile['type'] == 'file':
+            profile = pd.read_csv(exec_time_profile['value'])
+            et_df = build_et_df(profile, service_id)
+            et_generator = azure_et_generator(et_df, start_day)
+            return et_generator
+        elif exec_time_profile['type'] == 'deterministic':
+            value = exec_time_profile['value']
+            et_generator = deterministic_et_generator(value)
+            return et_generator
+        else:
+            raise ValueError(f"Unsupported execution time profile type: {exec_time_profile['type']} for service {service_id}")
+        
     def run(self, env: Environment):
         # deploy functions
         deployments = self.prepare_deployments()
@@ -103,22 +128,13 @@ class KBenchmark(Benchmark):
             yield from env.faas.deploy(deployment)
 
         for i in range(len(deployments)):
-            # tạo request profile
             service_id = deployments[i].fn.name
-            trigger_type = self.service_configs[service_id]['trigger_type']
-            sim_duration = self.service_configs[service_id]['sim_duration']
-            req_profile = pd.read_csv(self.service_configs[service_id]['req_profile_file'])
-            exectime_profile = pd.read_csv(self.service_configs[service_id]['exec_time_file'])
             
-            # sim_duration tính theo phút nhưng trong config để là giờ cho dễ hiểu
-            rpm, period, start_day = build_rpm(req_profile, HashFunction=service_id, sim_duration=sim_duration*60)
-            ia_generator = azure_ia_generator(rpm, period)
-            
-            et_df = build_et_df(exectime_profile, service_id)
-            et_generator = azure_et_generator(et_df, start_day)
+            ia_generator, start_day = self.prepare_invocation_profile(service_id)
+            et_generator = self.prepare_execution_time_profile(service_id, start_day)
 
             # đẩy request vào hệ thống
-            logger.info(f'Start triggering requests of service {service_id}')
+            logging.info(f'Start triggering requests of service {service_id}')
             yield from function_trigger(env=env, 
                                         deployment=deployments[i],
                                         et_generator=et_generator,
@@ -133,7 +149,7 @@ class KBenchmark(Benchmark):
             
             # Run time
             resource_config = KubernetesResourceConfiguration.create_from_str(cpu=config.get("resources")["cpu"], 
-                                                                              memory=config.get("resources")["ram"])
+                                                                            memory=config.get("resources")["ram"])
             container = FunctionContainer(image, resource_config)
             
             scaling_config = ScalingConfiguration()

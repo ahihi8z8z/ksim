@@ -18,12 +18,10 @@ import uuid
 
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
-
 class KsimEnv(gym.Env):
     metadata: Dict[str, Any] = {"render_modes": ["plot"], "render_fps": 60}
-    def __init__(self, render_dir: str, config_file: str = None):
-        self._parse_config(config_file)
+    def __init__(self, service_config: str = None, system_config: dict = None, render_mode: str = "plot", kwargs: Dict[str, Any] = None):
+        self._parse_config(service_config, system_config)
         self._ksim_init()
         
         self.observation_space = spaces.Dict(
@@ -45,19 +43,11 @@ class KsimEnv(gym.Env):
         nvec_flat = nvec.flatten() 
         self.action_space = spaces.MultiDiscrete(nvec_flat)
         
-        self._old_request_in = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_request_drop = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_request_out = {service_id: 0 for service_id in self.service_profile.keys()}
-        
-        self._ram_usage_percent = 0
-        self._cpu_usage_percent = 0
-        self._power_avg = 0
-        self._exec_interval_over_step = 0
-        self._scaler_latency_over_step = 0
-        self._pod_latency_over_step = 0
+        self._avg_ram_utilization = 0
+        self._avg_cpu_utilization = 0
+        self._avg_power = 0
+        self._avg_request_drop = 0 # Cái này là latency trung bình của các request xong trong step
+        self._avg_request_interval = 0 # Cái này là interval trung bình của các request đến trong step
         self._request_out_over_step = 0
         self._request_in_over_step = 0
         self._request_drop_over_step = 0
@@ -72,42 +62,43 @@ class KsimEnv(gym.Env):
             self._power_max += 150
             
         self.env_id = str(uuid.uuid4())[:8]  # Short UUID
-        logger.info(f"Init environment ID: {self.env_id}")
+        logging.info(f"Init environment ID: {self.env_id}")
         self._step_count = 0
         self.terminated = False
         self.truncated = False
         self.observation = None
         self.info = {}
         
-        self.render_mode = 'plot'
-        self.render_dir = render_dir
+        self.render_mode = render_mode
 
-    def _parse_config(self, config_file: str):
+    def _parse_config(self, service_config: str, system_config: dict):
         """
         Parses the configuration file to set up the environment.
         This method can be extended to read various parameters from the config file.
         """
-        with open(config_file, 'r') as f:
-            self.config = json.load(f)
+        with open(service_config, 'r') as f:
+            service_config = json.load(f)
             
-        self.num_servers = self.config.get("num_servers")
-        self.main_states = self.config.get("main_states")
-        self.scaler_config = self.config.get("scaler_config")
+        self.num_servers = system_config.get("num_servers")
+        self.main_states = system_config.get("main_states")
+        self.scaler_config = system_config.get("scaler_config")
 
-        self.timeout = self.config.get("timeout")
-        self.step_size = self.config.get("step_size")
-        self.random_init =  self.config.get("random_init")
-        self._max_episode_steps = self.config.get("max_episode_steps", 1440) 
-        self.server_cap = self.config.get("server_cap")
-        self.get_detail = self.config.get("get_detail")
+        self.step_size = system_config.get("step_size")
+        self._max_episode_steps = system_config.get("max_episode_steps", 1440) 
+        self.server_cap = system_config.get("server_cap")
+        self.get_detail = system_config.get("get_detail")
+        self.load_balancer = system_config.get("load_balancer", "least_connection").lower()
+        self.poll_config = system_config.get("poll_config", {"poll_interval": 0.1, "max_poll_attempts": 40})
+        self.random_start = system_config.get("random_start", False)
         
         self.service_profile = {}
-        for service_id, sv_config in self.config.get("services").items():
-            # Hiện tại chỉ có 1 service nên mấy cái này fix cứng
+        for service_id, sv_config in service_config.items():
+            # Hiện tại chỉ có 1 service nên mấy cái này fixed
             self.scale_max = sv_config["scale_max"]
             self.scale_min = sv_config["scale_min"]
             self.num_workers = sv_config["num_workers"]
             self.service_profile[service_id] = sv_config
+            self.service_profile[service_id]["random_start"] = self.random_start
             
             usage_dict = sv_config["state_resource_usage"]
             self.service_profile[service_id]["state_resource_usage"] = {
@@ -128,61 +119,41 @@ class KsimEnv(gym.Env):
         env.metrics = KMetrics(env=env, log=KRuntimeLogger(SimulatedClock(env)), get_detail=self.get_detail)
         env.metrics_server = KMetricsServer()
         env.resource_monitor = KResourceMonitor(env, reconcile_interval=1, logging=False)
-        if self.random_init:
-            for key in self.service_profile.keys():
-                self.service_profile[key]["scale_min_org"] = self.service_profile[key]["scale_min"]
-                self.service_profile[key]["scale_min"] = np.random.randint(self.service_profile[key]["scale_min_org"], self.service_profile[key]["scale_max"])
         env.simulator_factory = KSimulatorFactory(self.service_profile)
-        env.faas = KSystem(env, self.scaler_config)
+        env.faas = KSystem(env, self.scaler_config, self.load_balancer, self.poll_config)
         
         self.sim = KSimulation(topology=topology, benchmark=benchmark, env=env, name='KSim')
         
     def _get_obs(self):
         i = 0
         faas = self.sim.env.faas
-        metrics = self.sim.env.metrics
         for service_id, service_config in self.service_profile.items():
             # Trạng thái null là không tồn tại replica
             self._container_state[i, 0] = service_config["scale_max"] - len(faas.get_replicas2(service_id, AppState.CONCEIVED, lower=False, need_locked=False))
             self._container_state[i, 1] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
             self._container_state[i, 2] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
             
-            self._request_rate[i, 0] = self._request_in_over_step/self.step_size
+            self._request_rate[i, 0] = self._request_in_over_step
 
             i = i + 1
         return {"container_state": self._container_state, "request_rate": self._request_rate}
 
     def _cal_env_info(self):
         now = self.sim.env.now
-        metrics = self.sim.env.metrics
         metrics_server = self.sim.env.metrics_server   
         active_nodes = self.sim.env.faas.get_active_nodes()
         
         for service_id in self.service_profile.keys():
-            self._ram_usage_percent = metrics_server.get_avg_ram_utilization_func(service_id, now-self.step_size, now)/self._cluster_ram_total
-            self._cpu_usage_percent = metrics_server.get_avg_cpu_utilization_func(service_id, now-self.step_size, now)/self._cluster_cpu_total
-            self._power_avg = (90*len(active_nodes) + 60*self._cpu_usage_percent) / self._power_max
+            metrics = metrics_server.get_avg_all_metrics(service_id, now-self.step_size, now)
+            self._avg_ram_utilization = metrics["memory"] / self._cluster_ram_total
+            self._avg_cpu_utilization = metrics["cpu"] / self._cluster_cpu_total
+            self._avg_power = (90*len(active_nodes) + 60*self._avg_cpu_utilization) / self._power_max
             
-            now_request_drop = metrics.drop_count[service_id]
-            now_request_out = metrics.request_out[service_id]
-            now_request_in = metrics.request_in[service_id]
-            now_exec_interval = metrics.exec_interval[service_id]
-            now_scaler_latency = metrics.scaler_latency[service_id]
-            now_pod_latency = metrics.pod_latency[service_id]
-            
-            self._exec_interval_over_step = now_exec_interval - self._old_exec_interval[service_id] 
-            self._scaler_latency_over_step = now_scaler_latency - self._old_scaler_latency[service_id] 
-            self._pod_latency_over_step = now_pod_latency - self._old_pod_latency[service_id] 
-            self._request_drop_over_step = now_request_drop - self._old_request_drop[service_id]
-            self._request_out_over_step = now_request_out - self._old_request_out[service_id]
-            self._request_in_over_step = now_request_in - self._old_request_in[service_id]
-            
-            self._old_exec_interval[service_id] = now_exec_interval
-            self._old_scaler_latency[service_id] = now_scaler_latency
-            self._old_pod_latency[service_id] = now_pod_latency
-            self._old_request_drop[service_id] = now_request_drop
-            self._old_request_out[service_id] = now_request_out
-            self._old_request_in[service_id] = now_request_in
+            self._avg_request_drop = metrics["latency"]
+            self._avg_request_interval = metrics["request_interval"]
+            self._request_drop_over_step = metrics["drop_count"]
+            self._request_out_over_step = metrics["invocations"]
+            self._request_in_over_step = metrics["request_in"]
             
     def _get_info(self):  
         i = 0
@@ -195,18 +166,18 @@ class KsimEnv(gym.Env):
             self.info['UNLOADED_MODEL'] = self.observation["container_state"][i, 1]
             self.info['LOADED_MODEL'] = self.observation["container_state"][i, 2]
             
-            self.info['ram_util'] = self._ram_usage_percent
-            self.info['cpu_util'] = self._cpu_usage_percent
-            self.info['power_util'] = self._power_avg
+            self.info['ram_util'] = self._avg_ram_utilization
+            self.info['cpu_util'] = self._avg_cpu_utilization
+            self.info['power_util'] = self._avg_power
             self.info['request_out_over_step'] = self._request_out_over_step
             self.info['request_in_over_step'] = self._request_in_over_step
             self.info['request_drop_over_step'] = self._request_drop_over_step
-            self.info['request_details'] = self.sim.env.metrics.request_details
             i = i + 1
             
         if self.truncated:
             self.info['TimeLimit.truncated'] = True
             self.info['terminal_observation'] = self.observation
+            self.info['request_details'] = self.sim.env.metrics.request_details
             
         return self.info
     
@@ -223,11 +194,11 @@ class KsimEnv(gym.Env):
                 latency = 0
             else:
                 # 4 là cold start time
-                latency = (self._pod_latency_over_step + self._scaler_latency_over_step)/(4*self._request_out_over_step)
+                latency = self._latency_over_step/4
                 
-            reward += 3 - (blocking_rate + latency + self._power_avg)
+            reward += 3 - (blocking_rate + latency + self._avg_power)
             
-            logger.info(f"Service {service_id} - Reward: {reward}, Blocking Rate: {blocking_rate}, Latency/Rq: {latency}, Power: {self._power_avg}")
+            logging.info(f"Service {service_id} - Reward: {reward}, Blocking Rate: {blocking_rate}, Latency/Rq: {latency}, Power: {self._avg_power}")
 
         return reward
 
@@ -240,20 +211,13 @@ class KsimEnv(gym.Env):
         self.step_count = 0
         self.terminated = False
         self.truncated = False
-
-        self._old_request_in = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_request_drop = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_exec_interval = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_scaler_latency = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_pod_latency = {service_id: 0 for service_id in self.service_profile.keys()}
-        self._old_request_out = {service_id: 0 for service_id in self.service_profile.keys()}
         
         self.sim.step(self.step_size)
         self._cal_env_info()
         self.observation = self._get_obs()
         info = self._get_info()
         
-        logger.info(f"Reset environment ID: {self.env_id}")
+        logging.info(f"Reset environment ID: {self.env_id}")
 
         return self.observation, info
 
@@ -286,8 +250,6 @@ class KsimEnv(gym.Env):
     
     def render(self):
         return
-        # if self.step_count % self.metadata["render_fps"] == 0:
-        #     self.plot_request_details(log_dir=self.render_dir)
 
     def close(self):
         pass

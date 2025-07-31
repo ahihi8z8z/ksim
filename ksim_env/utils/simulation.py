@@ -15,7 +15,7 @@ from sim.topology import Topology
 
 from ksim_env.utils.scheduler import MostRequestedPriority
 
-logger = logging.getLogger(__name__)
+
 
 class KSimulation:
     def __init__(self, topology: Topology, benchmark: Benchmark, env: Environment = None, timeout=None, name=None):
@@ -25,7 +25,7 @@ class KSimulation:
         self.timeout = timeout
         self.name = name
         
-        logger.info('initializing simulation, benchmark: %s, topology nodes: %d',
+        logging.info('initializing simulation, benchmark: %s, topology nodes: %d',
                     type(self.benchmark).__name__, len(self.topology.nodes))
 
         env = self.env
@@ -38,22 +38,22 @@ class KSimulation:
         then = time.time()
 
         if self.timeout:
-            logger.info('starting timeout listener with timeout %d', self.timeout)
+            logging.info('starting timeout listener with timeout %d', self.timeout)
             env.process(timeout_listener(env, then, self.timeout))
 
-        logger.info('starting resource monitor')
+        logging.info('starting resource monitor')
         env.process(env.resource_monitor.run())
 
-        logger.info('setting up benchmark')
+        logging.info('setting up benchmark')
         self.benchmark.setup(env)
 
-        logger.info('starting faas system')
+        logging.info('starting faas system')
         env.faas.start()
 
-        logger.info('starting benchmark process')
+        logging.info('starting benchmark process')
         env.process(self.benchmark.run(env))
 
-        logger.info('executing simulation')
+        logging.info('executing simulation')
 
     def init_environment(self, env):
         # This is ksim_env specific initialization
@@ -95,20 +95,21 @@ class KSimulation:
         ]
 
         ## Ưu tiên xếp vào node nhiều tải để tiết kiệm power
-        default_priorities: List[Tuple[float, Priority]] = [(10.0, MostRequestedPriority()),
-                                                            (1.0, BalancedResourcePriority()),
-                                                            (1.0, LatencyAwareImageLocalityPriority()),
-                                                            (1.0, LocalityTypePriority()),
-                                                            (1.0, DataLocalityPriority()),
-                                                            (1.0, CapabilityPriority())]
-        return Scheduler(cluster_context=env.cluster, 
-                                 percentage_of_nodes_to_score=100, 
-                                 predicates=default_predicates,
-                                 priorities=default_priorities)
+        default_priorities: List[Tuple[float, Priority]] = [
+            (10.0, MostRequestedPriority()),
+            (1.0, BalancedResourcePriority()),
+            (1.0, CapabilityPriority()),
+        ]
+        return Scheduler(
+            cluster_context=env.cluster, 
+            percentage_of_nodes_to_score=100, 
+            predicates=default_predicates,
+            priorities=default_priorities,
+        )
 
     def step(self, interval: int = 1):
         """
         Run the simulation for a specified interval.
         """
-        logger.info('now: %s, running simulation for %d seconds', self.env.now, interval)
+        logging.debug('now: %s, running simulation for %d seconds', self.env.now, interval)
         self.env.run(until=self.env.now + interval)

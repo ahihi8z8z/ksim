@@ -44,3 +44,8 @@ def azure_et_generator(et_df, start_day):
 
 
     return sample_one
+
+def deterministic_et_generator(value):
+    def sample_one():
+        return value
+    return sample_one

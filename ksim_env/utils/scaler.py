@@ -8,7 +8,8 @@ from sim.faas import FaasSystem, FunctionDeployment
 from ksim_env.utils.appstate import AppState
 from ksim_env.utils.monitor import KMetricsServer
 
-logger = logging.getLogger(__name__)
+from tensorflow.keras.models import Sequential, load_model
+
 
 class FaasRequestScaler:
 
@@ -35,15 +36,15 @@ class FaasRequestScaler:
             self.function_invocations[self.fn_name] += invocations
             # TODO divide by alert window, but needs to store the invocations, such that reconcile_interval != alert_window is possible
             config = self.fn.scaling_config
-            logger.debug(f'invocations {invocations} and reconcile_interval {self.reconcile_interval} and threshold {self.threshold}')
+            logging.debug(f'invocations {invocations} and reconcile_interval {self.reconcile_interval} and threshold {self.threshold}')
             if (invocations / self.reconcile_interval) >= self.threshold:
                 scale = (config.scale_factor / 100) * config.scale_max
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}')       
+                logging.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}')       
             else:
                 scale = (config.scale_factor / 100) * config.scale_max
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
+                logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
 
     def stop(self):
         self.running = False
@@ -76,7 +77,7 @@ class AverageFaasRequestScaler:
             running += len(faas.get_replicas(self.fn.name, AppState.ACTIVING, False))
             
             if running == 0:
-                logger.debug("scaler 0 running replica")
+                logging.debug("scaler 0 running replica")
                 continue
 
             starting_replicas = len(faas.get_replicas(self.fn.name, AppState.STARTING, False))
@@ -98,29 +99,29 @@ class AverageFaasRequestScaler:
                     updated_desired_replicas = math.ceil(running * (average / self.threshold))
 
             if desired_replicas > running and updated_desired_replicas < running:
-                logger.debug(f"scaler no scaling in case of reversed decision: desired_replicas-{desired_replicas}, updated_desired_replicas-{updated_desired_replicas}, running-{running}")
+                logging.debug(f"scaler no scaling in case of reversed decision: desired_replicas-{desired_replicas}, updated_desired_replicas-{updated_desired_replicas}, running-{running}")
                 continue
 
             ratio = average / self.threshold
             if 1 > ratio >= 1 - self.fn.scaling_config.target_average_rps_threshold:
-                logger.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
+                logging.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
                 continue
 
             if 1 < ratio < 1 + self.fn.scaling_config.target_average_rps_threshold:
-                logger.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
+                logging.debug(f"scaler ratio {ratio} is sufficiently close to 1.0")
                 continue
 
-            logger.debug(f'scaler desired_replicas {desired_replicas} and running {running}')
+            logging.debug(f'scaler desired_replicas {desired_replicas} and running {running}')
             if desired_replicas < running:
                 # scale down
                 scale = running - desired_replicas
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
+                logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
             else:
                 # scale up
                 scale = desired_replicas - running
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
+                logging.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
 
     def stop(self):
         self.running = False
@@ -193,12 +194,12 @@ class AverageQueueFaasRequestScaler:
                 # scale down
                 scale = running - desired_replicas
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
-                logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
+                logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
             else:
                 # scale up
                 scale = desired_replicas - running
                 env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
-                logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
+                logging.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
 
     def stop(self):
         self.running = False
@@ -302,9 +303,54 @@ class HorizontalPodAutoscaler:
                     # scale down
                     scale = running - desired_replicas
                     self.env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "LOADED_MODEL",  "NULL"))
-                    logger.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
+                    logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}')
                 else:
                     # scale up
                     scale = desired_replicas - running
                     self.env.process(faas.change_state(self.fn_name, int(np.ceil(scale)), "NULL", "LOADED_MODEL"))
-                    logger.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
+                    logging.debug(f'scaler scaled up and loaded model {self.fn_name} by {int(np.ceil(scale))}') 
+
+class LSTMScaler:
+    """
+    https://faculty.washington.edu/wlloyd/courses/tcss591/papers/Mitigating_Cold_Start_Problem_in_Serverless_Computing_A_Reinforcement_Learning_Approach.pdf
+    Bài này dùng cho OpenWhisk, workaround thành scaler cho ksim.
+    Cái làm 2 việc: 
+    1. Scale down khi idle quá thời gian idle_threshold
+    2. Scale up dựa vào dự đoán của LSTM model về số lượng request trong alert_window tiếp theo.
+    """
+
+    def __init__(self, fn: FunctionDeployment, env: Environment, lstm_model_path=None):
+        self.env = env
+        self.function_invocations = dict()
+        self.idle_threshold = 60
+        self.lstm_model = load_model(lstm_model_path)
+        self.seq_len, feat_dim = self.lstm_model.input_shape[1:]
+        assert feat_dim == 1, "Model input luôn là 1 chiều, vì chỉ có 1 feature là số lượng request"
+        self.invocation_buffer = np.zeros((self.seq_len, 1), dtype=np.float32)
+        self.alert_window = fn.scaling_config.alert_window
+        self.running = True
+        self.fn_name = fn.name
+        self.fn = fn
+
+    def update_invocation_buffer(self, new_point):
+        self.invocation_buffer = np.roll(self.invocation_buffer, shift=-1, axis=0)
+        self.invocation_buffer[-1, 0] = new_point
+    
+    def run(self):
+        env: Environment = self.env
+        faas: FaasSystem = env.faas
+        yield env.timeout(self.alert_window*self.seq_len) # wait for the first alert window to fill the buffer
+        while self.running:
+            yield env.timeout(self.alert_window)
+            now = env.now
+            running = faas.get_replicas(self.fn.name, AppState.LOADED_MODEL, False)
+            for replica in running:
+                if replica.last_invocation < now - self.idle_threshold:
+                    env.process(faas.change_state(self.fn_name, int(np)
+                    logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}') 
+    def stop(self):
+        self.running = False
+        
+    def config_threshold(self, idle_threshold: float):
+        self.idle_threshold = idle_threshold
+        logging.info(f"LSTMScaler threshold updated to {self.idle_threshold}")

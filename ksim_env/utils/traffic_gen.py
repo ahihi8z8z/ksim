@@ -66,27 +66,26 @@ def build_interval_generator(request_array, period:int = 1440):
 
     return g
 
-def build_rpm(profile: pd.DataFrame, HashFunction: str, sim_duration: int) -> tuple:
+def build_rpm(profile: pd.DataFrame, HashFunction: str, random_start: bool) -> tuple:
     data = profile[profile['HashFunction'].str.startswith(HashFunction)]
-    row = data.sample(n=1, random_state=42).iloc[0, 4:].values 
+    row = data.sample(n=1).iloc[0, 4:].values 
     period = 1440
     
-    if len(row) < sim_duration:
-        sim_duration = len(row)
-        
-    def randint_step(low, high, step):
-        num = (high - low) // step
-        return low + np.random.randint(0, num+1) * step
+    if random_start:
+        def randint_step(low, high, step):
+            num = (high - low) // step
+            return low + np.random.randint(0, num+1) * step
+        start_minute = randint_step(0, len(row) - period, period)
+    else:
+        start_minute = 0
+
+    start_minute -= start_minute % period
     
-    # chọn lấy 1 ngày ngẫu nhiên
-    start = randint_step(0, len(row) - sim_duration + 1, period) 
-    start -= start % period
-    
-    # Nhân 10 lên mô phỏng vô hạn
-    rpm = np.tile(row[start : start + sim_duration], 10)
+    # Nhân 5 lên để đảm bảo có đủ dữ liệu
+    rpm = np.tile(row[start_minute:], 5)
     
     # period = estimate_period(rpm)
-    return rpm, period, start//period 
+    return rpm, period, start_minute// 1440  # Trả về start_day theo đơn vị ngày
 
 def azure_ia_generator(rpm, period: int):
     ia_gen = build_interval_generator(rpm, period)

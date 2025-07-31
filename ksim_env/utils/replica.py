@@ -1,8 +1,7 @@
 import logging
 from sim.faas import FunctionReplica
 
-
-logger = logging.getLogger(__name__)
-
 class KFunctionReplica(FunctionReplica):
     locked: bool # thên lock tránh nhiều request cùng sửa 1 replica
+    last_invocation: float # thời điểm request cuối cùng được xử lý
+    uuid: str # uuid của replica
