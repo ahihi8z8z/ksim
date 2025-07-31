@@ -18,7 +18,7 @@ import uuid
 
 from typing import Any, Dict
 
-class KsimEnv(gym.Env):
+class KsimEnv_V1(gym.Env):
     metadata: Dict[str, Any] = {"render_modes": ["plot"], "render_fps": 60}
     def __init__(self, service_config: str = None, system_config: dict = None, render_mode: str = "plot", kwargs: Dict[str, Any] = None):
         self._parse_config(service_config, system_config)
@@ -32,8 +32,8 @@ class KsimEnv(gym.Env):
             }
         )
         
-        # action (x,y,z): chuyển x container từ trạng thái y về trạng thái z
-        self.action_space = spaces.Box(low=1, high=100, shape=(1,), dtype=np.float32),
+        # action là thay đổi idle threshold
+        self.action_space = spaces.Box(low=1, high=100, shape=(1,), dtype=np.float32)
         
         self._avg_ram_utilization = 0
         self._avg_cpu_utilization = 0
@@ -43,6 +43,7 @@ class KsimEnv(gym.Env):
         self._request_out_over_step = 0
         self._request_in_over_step = 0
         self._request_drop_over_step = 0
+        self._cold_starts_over_step = 0
 
         self._cluster_cpu_total = 0
         self._cluster_ram_total = 0
@@ -118,18 +119,13 @@ class KsimEnv(gym.Env):
         
     def _get_obs(self):
         i = 0
-        faas = self.sim.env.faas
-        for service_id, service_config in self.service_profile.items():
-            # Trạng thái null là không tồn tại replica
-            self._container_state[i, 0] = service_config["scale_max"] - len(faas.get_replicas2(service_id, AppState.CONCEIVED, lower=False, need_locked=False))
-            self._container_state[i, 1] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
-            self._container_state[i, 2] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
-            
-            self._request_rate[i, 0] = self._request_in_over_step
-
-            i = i + 1
-        return {"container_state": self._container_state, "request_rate": self._request_rate}
-
+        obs = {
+            "request_interval": [self._avg_request_interval],
+            "warm_start_invocations": [self._request_out_over_step - self._cold_starts_over_step],
+            "cold_start_invocations": [self._cold_starts_over_step]
+        }
+        return obs
+    
     def _cal_env_info(self):
         now = self.sim.env.now
         metrics_server = self.sim.env.metrics_server   
@@ -144,6 +140,7 @@ class KsimEnv(gym.Env):
             self._avg_request_drop = metrics["latency"]
             self._avg_request_interval = metrics["request_interval"]
             self._request_drop_over_step = metrics["drop_count"]
+            self._cold_starts_over_step = metrics["cold_starts"]
             self._request_out_over_step = metrics["invocations"]
             self._request_in_over_step = metrics["request_in"]
             
@@ -152,11 +149,12 @@ class KsimEnv(gym.Env):
         self.info['NULL'] = 0
         self.info['UNLOADED_MODEL'] = 0
         self.info['LOADED_MODEL'] = 0
+        faas = self.sim.env.faas
         
-        for _ in self.service_profile.keys():
-            self.info['NULL'] = self.observation["container_state"][i, 0]
-            self.info['UNLOADED_MODEL'] = self.observation["container_state"][i, 1]
-            self.info['LOADED_MODEL'] = self.observation["container_state"][i, 2]
+        for service_id, service_config in self.service_profile.items():
+            self.info['NULL'] = service_config["scale_max"] - len(faas.get_replicas2(service_id, AppState.CONCEIVED, lower=False, need_locked=False))
+            self.info['UNLOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
+            self.info['LOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
             
             self.info['ram_util'] = self._avg_ram_utilization
             self.info['cpu_util'] = self._avg_cpu_utilization
@@ -164,6 +162,7 @@ class KsimEnv(gym.Env):
             self.info['request_out_over_step'] = self._request_out_over_step
             self.info['request_in_over_step'] = self._request_in_over_step
             self.info['request_drop_over_step'] = self._request_drop_over_step
+            self.info['cold_start_over_step'] = self._cold_starts_over_step
             i = i + 1
             
         if self.truncated:
@@ -175,22 +174,14 @@ class KsimEnv(gym.Env):
     
     def _get_reward(self):
         reward = 0
-        # Hướng tới cân bằng request latency, tỉ lệ drop và tài nguyên sử dụng
         for service_id, _ in self.service_profile.items():
-            if self._request_in_over_step == 0:
-                blocking_rate = 0
-            else:
-                blocking_rate = self._request_drop_over_step / self._request_in_over_step
-            
             if self._request_out_over_step == 0:
-                latency = 0
+                cold_start_rate = 0
             else:
-                # 4 là cold start time
-                latency = self._latency_over_step/4
+                cold_start_rate = self._cold_starts_over_step / self._request_out_over_step
                 
-            reward += 3 - (blocking_rate + latency + self._avg_power)
-            
-            logging.info(f"Service {service_id} - Reward: {reward}, Blocking Rate: {blocking_rate}, Latency/Rq: {latency}, Power: {self._avg_power}")
+            reward -= cold_start_rate + self._avg_ram_utilization
+            logging.info(f"Service {service_id} - Reward: {reward}, Cold Start Rate: {cold_start_rate}, RAM utilization: {self._avg_ram_utilization}")
 
         return reward
 
@@ -217,14 +208,11 @@ class KsimEnv(gym.Env):
         i=0
         env = self.sim.env
         faas = env.faas
-        action = np.array(action).reshape((len(self.service_profile), 3))
-        self.info["action"] = action
-        for service_id in self.service_profile.keys():
-            num_replica = action[i, 0]
-            from_state = self.main_states[action[i, 1]]
-            to_state = self.main_states[action[i, 2]]
-            env.process(faas.change_state(service_id, num_replica, from_state, to_state))
-            i = i + 1
+        idle_threshold = action[0]
+        self.info["idle_threshold"] = idle_threshold
+        
+        for service_id, _ in self.service_profile.items():
+            faas.change_idle_threshold(service_id, idle_threshold)
             
         self.sim.step(self.step_size)
         self.step_count += 1

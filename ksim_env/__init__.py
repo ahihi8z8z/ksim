@@ -8,6 +8,6 @@ register(
 
 register(
     id="KsimEnv-V1",
-    entry_point="ksim_env.envs:KsimEnv1",
+    entry_point="ksim_env.envs:KsimEnv_V1",
     kwargs={}
 )

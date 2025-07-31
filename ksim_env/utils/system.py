@@ -575,9 +575,12 @@ class KSystem(FaasSystem):
         # for replica in replicas:
         #     yield from replica.simulator.unload_model(self.env, replica)
 
-            
     def get_active_nodes(self):
         return self.active_nodes
+    
+    def change_idle_threshold(self, function_id, minute):
+        scaler = self.lstm_scalers[function_id]
+        scaler.config_threshold(minute*60)
             
 def simulate_function_start(env: Environment, replica: KFunctionReplica):
     sim: FunctionSimulator = replica.simulator

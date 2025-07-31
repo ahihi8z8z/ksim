@@ -43,8 +43,10 @@ def train(args, system_config):
     n_eval_episodes = args.n_eval_episodes
     deterministic = args.deterministic
     tensorboard_log = args.tensorboard_log
+    algorithm = args.algorithm
+    env_id = args.env_id
     
-    train_env = make_vec_env(env_id="KsimEnv-V0", n_envs=n_envs, 
+    train_env = make_vec_env(env_id=env_id, n_envs=n_envs, 
                         vec_env_cls=SubprocVecEnv, 
                         env_kwargs= {"system_config": system_config,
                                     "service_config": "service_config.json",}
@@ -57,10 +59,16 @@ def train(args, system_config):
                                 log_path=log_dir, eval_freq=eval_freq, n_eval_episodes = n_eval_episodes,
                                 deterministic=deterministic)
 
-    model = PPO(policy="MultiInputPolicy", n_steps=n_steps, 
-                env=train_vec_env, 
-                verbose=2, device=device,
-                tensorboard_log=tensorboard_log)
+    if algorithm == "PPO":
+        model = PPO(policy="MultiInputPolicy", n_steps=n_steps, 
+                    env=train_vec_env, 
+                    verbose=2, device=device,
+                    tensorboard_log=tensorboard_log)
+    elif algorithm == "A2C":
+        model = A2C(policy="MultiInputPolicy", n_steps=n_steps, 
+                    env=train_vec_env, 
+                    verbose=2, device=device,
+                    tensorboard_log=tensorboard_log)
     
     model.learn(total_timesteps=total_timesteps, 
                 callback=eval_callback, 
@@ -75,13 +83,19 @@ def evaluate(args, system_config):
     device = args.device
     window_size = args.window_size
     deterministic = args.deterministic
+    algorithm = args.algorithm
+    env_id = args.env_id
     
-    eval_env = make_vec_env(env_id="KsimEnv-V0", n_envs=n_envs, 
+    eval_env = make_vec_env(env_id=env_id, n_envs=n_envs, 
                         vec_env_cls=SubprocVecEnv, 
                         env_kwargs= {"system_config": system_config,
                                     "service_config": "service_config.json",}
                         )
-    model = PPO.load(path=model_path, env=eval_env, device=device)
+    if algorithm == "PPO":
+        model = PPO.load(path=model_path, env=eval_env, device=device)
+    elif algorithm == "A2C":
+        model = A2C.load(path=model_path, env=eval_env, device=device)
+        
     env = model.get_env()
     obs = env.reset()
     template = {
@@ -118,8 +132,9 @@ def evaluate(args, system_config):
 def baseline(args, system_config):
     n_envs = 1
     window_size = args.window_size
+    env_id = args.env_id
     
-    env = gym.make('KsimEnv-V0', system_config=system_config, service_config="service_config.json")
+    env = gym.make(env_id, system_config=system_config, service_config="service_config.json")
     obs = env.reset()
     truncated = False
     template = {
@@ -197,6 +212,13 @@ if __name__ == "__main__":
         required=True,
         help="Choose one of: train, eval, baseline"
     )
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        choices=["PPO", "A2C"], 
+        default="PPO",
+        help="Choose RL algorithms"
+    )
 
     parser.add_argument("--n-envs", type=int, default=8, help="Number of environments to run in parallel")
     parser.add_argument("--eval-freq", type=int, default=288, help="Frequency of evaluation in timesteps")
@@ -211,6 +233,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default="logs/PPO/best_model.zip", help="Path to the model for evaluation")
     parser.add_argument("--window-size", type=int, default=1, help="Window size for smoothing in plots")
     parser.add_argument("--clear-logs", type=bool, default=True, help="Clear existing logs before running")
+    parser.add_argument("--env-id", type=str, default="KsimEnv-V0", help="Gymmasium env id")
 
     args = parser.parse_args()
     main(args)
