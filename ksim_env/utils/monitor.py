@@ -25,7 +25,7 @@ class KMetricsServer:
         return deque(maxlen=self.MAX_WINDOWS)
 
     def put(self, window: 'MetricsWindow'):
-        fn = window.replica.fn_name
+        fn = window.function
         self._windows[fn].append(window)
 
     def get_avg_gauge(self, fn_name: str, metric: str, window_start: float, window_end: float) -> float:
@@ -101,6 +101,7 @@ class KMetricsServer:
         ret['request_in'] = (end_metrics['request_in'] - start_metrics['request_in']) 
         ret['invocations'] = (end_metrics['invocations'] - start_metrics['invocations']) 
         ret['drop_count'] = (end_metrics['drop_count'] - start_metrics['drop_count']) 
+        ret['cold_starts'] = (end_metrics['cold_starts'] - start_metrics['cold_starts'])
         ret['request_interval'] = (end_metrics['request_interval'] - start_metrics['request_interval']) / ret['request_in'] if ret['request_in'] > 0 else 0.0
         ret['latency'] = (end_metrics['latency'] - start_metrics['latency']) / ret['invocations'] if ret['invocations'] > 0 else 0.0
         
@@ -123,11 +124,12 @@ class KResourceMonitor:
                 function_id = deployment.name
                 metrics = MetricsWindow(
                     function=function_id,
-                    data={
+                    metrics={
                         "cpu": 0.0, 
                         "memory": 0.0,
                         "latency": 0.0, 
                         "invocations": 0, 
+                        "cold_starts": 0,
                         "drop_count": 0, 
                         "request_in": 0, 
                         "request_interval": 0},
@@ -138,16 +140,17 @@ class KResourceMonitor:
                 for replica in replicas:
                     utilization = self.env.resource_state.get_resource_utilization(replica)
                     if utilization.is_empty():
-                        metrics.data["cpu"] += 0.0
-                        metrics.data["memory"] += 0.0
+                        metrics.metrics["cpu"] += 0.0
+                        metrics.metrics["memory"] += 0.0
                     else:
-                        metrics.data["cpu"] += utilization.cpu
-                        metrics.data["memory"] += utilization.memory
+                        metrics.metrics["cpu"] += utilization.get_resource('cpu')
+                        metrics.metrics["memory"] +=utilization.get_resource('memory')
                         
-                metrics.data["latency"] = system_metrics.scaler_latency[function_id]
-                metrics.data["invocations"] = system_metrics.invocations[function_id]
-                metrics.data["drop_count"] = system_metrics.drop_count[function_id]
-                metrics.data["request_in"] = system_metrics.request_in[function_id]
-                metrics.data["request_interval"] = system_metrics.request_interval[function_id]
+                metrics.metrics["latency"] = system_metrics.scaler_latency[function_id]
+                metrics.metrics["invocations"] = system_metrics.invocations[function_id]
+                metrics.metrics["drop_count"] = system_metrics.drop_count[function_id]
+                metrics.metrics["request_in"] = system_metrics.request_in[function_id]
+                metrics.metrics["request_interval"] = system_metrics.request_interval[function_id]
+                metrics.metrics["cold_starts"] = system_metrics.cold_starts[function_id]
                     
                 self.metric_server.put(metrics)

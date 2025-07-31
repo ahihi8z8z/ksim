@@ -77,6 +77,11 @@ class ScalingConfiguration:
     target_queue_length: int = 75
 
     target_average_rps_threshold = 0.1
+    
+    # lstm scaler
+    lstm_factor: float = 0.02  # factor to scale the LSTM prediction, default is 0.02
+    lstm_model_path: str = None
+    scaler_path: str = None
 
 class KBenchmark(Benchmark):
     def __init__(self, service_configs: Dict) -> None:
@@ -162,6 +167,9 @@ class KBenchmark(Benchmark):
             scaling_config.target_average_rps = config['target_average_rps']
             scaling_config.target_queue_length = config['target_queue_length']
             scaling_config.target_average_rps_threshold = config['target_average_rps_threshold']
+            scaling_config.lstm_factor = config.get('lstm_factor', 0.02)
+            scaling_config.lstm_model_path = config.get('lstm_model_path')
+            scaling_config.scaler_path = config.get('scaler_path')
 
             fd = FunctionDeployment(
                 func,

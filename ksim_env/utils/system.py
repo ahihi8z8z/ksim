@@ -8,7 +8,7 @@ from sim.faas import FunctionDeployment, FunctionContainer, FunctionRequest, Fun
 from sim.skippy import create_function_pod
 from sim.faas.core import FaasSystem
 
-from ksim_env.utils.scaler import FaasRequestScaler, AverageFaasRequestScaler, AverageQueueFaasRequestScaler, HorizontalPodAutoscaler
+from ksim_env.utils.scaler import FaasRequestScaler, AverageFaasRequestScaler, AverageQueueFaasRequestScaler, LSTMScaler
 from ksim_env.utils.loadbalancer import KRoundRobinLoadBalancer, LeastConnectionLoadBalancer
 from ksim_env.utils.replica import KFunctionReplica
 from ksim_env.utils.appstate import AppState
@@ -50,6 +50,7 @@ class KSystem(FaasSystem):
         self.faas_scalers: Dict[str, FaasRequestScaler] = dict()
         self.avg_faas_scalers: Dict[str, AverageFaasRequestScaler] = dict()
         self.queue_faas_scalers: Dict[str, AverageQueueFaasRequestScaler] = dict()
+        self.lstm_scalers: Dict[str, LSTMScaler] = dict()
         
         self.poll_interval = poll_config.get("poll_interval", 0.1)
         self.max_poll_attempts = poll_config.get("max_poll_attempts", 40)
@@ -110,12 +111,15 @@ class KSystem(FaasSystem):
         self.faas_scalers[fd.name] = FaasRequestScaler(fd, self.env)
         self.avg_faas_scalers[fd.name] = AverageFaasRequestScaler(fd, self.env)
         self.queue_faas_scalers[fd.name] = AverageQueueFaasRequestScaler(fd, self.env)
+        self.lstm_scalers[fd.name] = LSTMScaler(fd, self.env)
 
         if self.scaler_config.get("scale_by_requests"):
             self.env.process(self.faas_scalers[fd.name].run())
         if self.scaler_config.get("scale_by_average_requests_per_replica"):
             self.env.process(self.avg_faas_scalers[fd.name].run())
         if self.scaler_config.get("scale_by_queue_requests_per_replica"):
+            self.env.process(self.queue_faas_scalers[fd.name].run())
+        if self.scaler_config.get("scale_by_lstm"):
             self.env.process(self.queue_faas_scalers[fd.name].run())
 
         for f in fd.fn_containers:
@@ -230,7 +234,7 @@ class KSystem(FaasSystem):
         
         if specific_replicas is not None:
             logging.info(f'scaling down {fn_name} by {len(specific_replicas)}')
-            env.metrics.log_scaling(fn_name, -can_remove)
+            env.metrics.log_scaling(fn_name, -len(specific_replicas))
             
             teardown_procs = [
                 env.process(self.teardown_and_release(replica))
@@ -410,7 +414,7 @@ class KSystem(FaasSystem):
     # TODO: Vấn đề của cách làm hiện tại là sẽ có những container bị chuyển trạng thái dở dang khi api muốn nhảy nhiều bước
     # Cách fix hợp lý là logic chọn các relica để chuyển trạng thái nên do hàm change_state thực hiện.
     # Các hàm chuyển trạng thái nhận list này và thực hiện hành động
-    def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str, version2: True, specific_replicas: List[KFunctionReplica] = None):
+    def change_state(self, fn_name: str, num_replica: int, from_state: str, to_state: str, version2: bool = True, specific_replicas: List[KFunctionReplica] = None):
         logging.info(f'Received request changing {num_replica} replicas of {fn_name} from {from_state} to {to_state} ')
         from_idx = self.states.index(from_state)
         to_idx = self.states.index(to_state)

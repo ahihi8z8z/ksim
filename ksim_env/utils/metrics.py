@@ -45,6 +45,7 @@ class KMetrics(Metrics):
     def __init__(self, env, log, get_detail) -> None:
         super().__init__(env, log)
         self.scaler_latency = defaultdict(float)
+        self.cold_starts = defaultdict(float)
         self.request_interval = defaultdict(float)
         self.exec_duration = defaultdict(float)
         self.drop_count = defaultdict(int)
@@ -63,7 +64,9 @@ class KMetrics(Metrics):
         # function = self.env.faas.get_function_index()[function_image]
         # mem = function.get_resource_requirements().get('memory')
         
-        self.scaler_latency[request.name] +=  t_wait
+        self.scaler_latency[request.name] += t_wait
+        if t_wait > 0:
+            self.cold_starts[request.name] += 1
         if self.get_detail and t_wait > 0:
             self.request_details[request.name]['scaler_latency'].append(t_wait)
 

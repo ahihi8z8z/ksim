@@ -8,7 +8,8 @@ from sim.faas import FaasSystem, FunctionDeployment
 from ksim_env.utils.appstate import AppState
 from ksim_env.utils.monitor import KMetricsServer
 
-from tensorflow.keras.models import Sequential, load_model
+import torch
+import joblib
 
 
 class FaasRequestScaler:
@@ -319,35 +320,95 @@ class LSTMScaler:
     2. Scale up dựa vào dự đoán của LSTM model về số lượng request trong alert_window tiếp theo.
     """
 
-    def __init__(self, fn: FunctionDeployment, env: Environment, lstm_model_path=None):
+    def __init__(self, fn: FunctionDeployment, env: Environment):
         self.env = env
         self.function_invocations = dict()
         self.idle_threshold = 60
-        self.lstm_model = load_model(lstm_model_path)
-        self.seq_len, feat_dim = self.lstm_model.input_shape[1:]
-        assert feat_dim == 1, "Model input luôn là 1 chiều, vì chỉ có 1 feature là số lượng request"
+        self.lstm_factor = fn.scaling_config.lstm_factor
+
+        # Load PyTorch model
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.lstm_model = self._load_model(fn.scaling_config.lstm_model_path).to(self.device)
+        self.lstm_model.eval()
+
+        # Load scaler
+        self.scaler = joblib.load(fn.scaling_config.scaler_path)
+
+        self.seq_len = self.lstm_model.seq_len  # gán trực tiếp nếu có trong model
         self.invocation_buffer = np.zeros((self.seq_len, 1), dtype=np.float32)
+
         self.alert_window = fn.scaling_config.alert_window
         self.running = True
         self.fn_name = fn.name
         self.fn = fn
 
+    def _load_model(self, model_path):
+        # Phải có cùng class định nghĩa với model lúc train
+        class LSTMModel(torch.nn.Module):
+            def __init__(self, input_size=1, hidden_size=32, num_layers=4, dropout=0.5):
+                super().__init__()
+                self.seq_len = 60  # Gán để dễ sử dụng bên ngoài
+                self.lstm = torch.nn.LSTM(input_size, hidden_size, num_layers=num_layers, dropout=dropout, batch_first=True)
+                self.fc = torch.nn.Linear(hidden_size, 1)
+
+            def forward(self, x):
+                out, _ = self.lstm(x)
+                out = out[:, -1, :]
+                return self.fc(out)
+
+        model = LSTMModel()
+        model.load_state_dict(torch.load(model_path, map_location=self.device))
+        return model
+    
     def update_invocation_buffer(self, new_point):
         self.invocation_buffer = np.roll(self.invocation_buffer, shift=-1, axis=0)
         self.invocation_buffer[-1, 0] = new_point
     
     def run(self):
         env: Environment = self.env
+        metrics_server = env.metrics_server   
         faas: FaasSystem = env.faas
-        yield env.timeout(self.alert_window*self.seq_len) # wait for the first alert window to fill the buffer
+
+        for _ in range(self.seq_len):
+            start = env.now
+            yield env.timeout(self.alert_window)
+            avg_invocation = metrics_server.get_avg_invocations(self.fn.name, start, env.now)
+            self.update_invocation_buffer(avg_invocation)
+
         while self.running:
+            start = env.now
             yield env.timeout(self.alert_window)
             now = env.now
+            avg_invocation = metrics_server.get_avg_invocations(self.fn.name, start, now)
+            self.update_invocation_buffer(avg_invocation)
             running = faas.get_replicas(self.fn.name, AppState.LOADED_MODEL, False)
-            for replica in running:
-                if replica.last_invocation < now - self.idle_threshold:
-                    env.process(faas.change_state(self.fn_name, int(np)
-                    logging.debug(f'scaler unloaded model and scaled down {self.fn_name} by {int(np.ceil(scale))}') 
+
+            # Scale input & convert to tensor
+            scaled_input = self.scaler.transform(self.invocation_buffer).reshape(1, -1, 1)
+            input_tensor = torch.tensor(scaled_input, dtype=torch.float32).to(self.device)
+
+            # Predict
+            with torch.no_grad():
+                pred_tensor = self.lstm_model(input_tensor)
+            pred_rescaled = self.scaler.inverse_transform(pred_tensor.cpu().numpy())
+            needed_replicas = int(np.ceil(pred_rescaled[0, 0] * self.lstm_factor))
+            needed_replicas = max(0, needed_replicas)
+
+            if needed_replicas > len(running):
+                scale = needed_replicas - len(running)
+                env.process(faas.change_state(self.fn_name, scale, "NULL", "LOADED_MODEL"))
+                logging.debug(f'LSTMScaler want to scale up {self.fn_name} by {scale}')
+            else:
+                redundant = len(running) - needed_replicas
+                scaled_down = 0
+                specific_replicas = []
+                for replica in running:
+                    if replica.last_invocation < now - self.idle_threshold and scaled_down < redundant:
+                        specific_replicas.append(replica)
+                        scaled_down += 1
+                env.process(faas.change_state(self.fn_name, 1, "LOADED_MODEL", "NULL", specific_replicas=specific_replicas))
+                logging.debug(f'LSTMScaler want to scale down {self.fn_name} by {scaled_down} replicas')
+
     def stop(self):
         self.running = False
         
