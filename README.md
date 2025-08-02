@@ -42,7 +42,7 @@ Sau đó truy cập `http://{host ip}:6006/` để xem
     - `NULL`: replica không tồn tại
     - `CONCEIVED`: replica đã được thêm vào control plane nhưng chưa được tạo trên node
     - `STARTING`: khởi tạo replica trên node
-    - `SUSPENDED`: replica bị tạm dừng trước khi bị scale down
+    - `SUSPENDING`: replica bị tạm dừng trước khi bị scale down
     - `UNLOADED_MODEL`: replica đã được tạo trên node nhưng chưa khởi tạo model AI
     - `LOADING_MODEL`: đang khởi tạo model AI
     - `UNLOADING_MODEL`: đang gỡ bỏ model AI

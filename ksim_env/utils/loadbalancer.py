@@ -7,7 +7,7 @@ from sim.faas import FunctionRequest
 from ksim_env.utils.replica import KFunctionReplica
 from ksim_env.utils.appstate import AppState
 
-
+import logging
 
 class KRoundRobinLoadBalancer:
     env: Environment
@@ -20,10 +20,10 @@ class KRoundRobinLoadBalancer:
         self.counters = defaultdict(lambda: 0)
 
     def get_running_replicas(self, function: str):
-        return [replica for replica in self.replicas[function] if replica.state.value >= AppState.LOADED_MODEL.value]
+        return [replica for replica in self.replicas[function] if replica.state.value == AppState.LOADED_MODEL.value]
 
-    def next_replica(self, request: FunctionRequest) -> KFunctionReplica:
-        replicas = self.get_running_replicas(request.name)
+    def next_replica(self, request: FunctionRequest, replicas: List[KFunctionReplica]) -> KFunctionReplica:
+        # replicas = self.get_running_replicas(request.name)
         i = self.counters[request.name] % len(replicas)
         self.counters[request.name] = (i + 1) % len(replicas)
 
@@ -43,8 +43,8 @@ class LeastConnectionLoadBalancer:
     def get_running_replicas(self, function: str):
         return [replica for replica in self.replicas[function] if replica.state.value >= AppState.LOADED_MODEL.value]
 
-    def next_replica(self, request: FunctionRequest) -> KFunctionReplica:
-        replicas = self.get_running_replicas(request.name)
+    def next_replica(self, request: FunctionRequest, replicas: List[KFunctionReplica]) -> KFunctionReplica:
+        # replicas = self.get_running_replicas(request.name)
         choosen = replicas[0]
         min_queue = len(choosen.simulator.queue.queue)
         for replica in replicas:

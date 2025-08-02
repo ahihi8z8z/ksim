@@ -44,7 +44,7 @@ class KMetrics(Metrics):
 
     def __init__(self, env, log, get_detail) -> None:
         super().__init__(env, log)
-        self.scaler_latency = defaultdict(float)
+        self.latency = defaultdict(float)
         self.cold_starts = defaultdict(float)
         self.request_interval = defaultdict(float)
         self.exec_duration = defaultdict(float)
@@ -64,11 +64,11 @@ class KMetrics(Metrics):
         # function = self.env.faas.get_function_index()[function_image]
         # mem = function.get_resource_requirements().get('memory')
         
-        self.scaler_latency[request.name] += t_wait
+        self.latency[request.name] += t_wait
         if t_wait > 0:
             self.cold_starts[request.name] += 1
         if self.get_detail and t_wait > 0:
-            self.request_details[request.name]['scaler_latency'].append(t_wait)
+            self.request_details[request.name]['latency'].append(t_wait)
 
         self.log('invocations', {'t_wait': t_wait, 't_exec': t_exec, 't_start': t_start, **kwargs},
                  function_name=request.name,
@@ -85,14 +85,15 @@ class KMetrics(Metrics):
                 function_name=function_name,
                 function_image=function_image, node=node_name, replica_id=replica_id, request_id=request_id)
         
-    def log_drop(self, function_name, request_id):
+    def log_drop(self, function_name, request_id, timeout):
         self.drop_count[function_name] += 1
+        self.latency[function_name] += timeout
         self.log('drop request', {'request_id': request_id}, function_name=function_name)
         
     def log_request_in(self, function_name: str, request_interval: float):
         self.request_in[function_name] += 1
         self.request_interval[function_name] += request_interval
-        self.log('receive request', 1, function_name=function_name)
+        # self.log('receive request', 1, function_name=function_name)
         
     def log_start_exec(self, request: FunctionRequest, replica: FunctionReplica, **kwargs):
         func_id = replica.function.name

@@ -46,7 +46,7 @@ class KsimEnv(gym.Env):
         self._avg_ram_utilization = 0
         self._avg_cpu_utilization = 0
         self._avg_power = 0
-        self._avg_request_drop = 0 # Cái này là latency trung bình của các request xong trong step
+        self._avg_request_latency = 0 # Cái này là latency trung bình của các request xong trong step
         self._avg_request_interval = 0 # Cái này là interval trung bình của các request đến trong step
         self._request_out_over_step = 0
         self._request_in_over_step = 0
@@ -149,7 +149,7 @@ class KsimEnv(gym.Env):
             self._avg_cpu_utilization = metrics["cpu"] / self._cluster_cpu_total
             self._avg_power = (90*len(active_nodes) + 60*self._avg_cpu_utilization) / self._power_max
             
-            self._avg_request_drop = metrics["latency"]
+            self._latency_over_step = metrics["latency"]
             self._avg_request_interval = metrics["request_interval"]
             self._request_drop_over_step = metrics["drop_count"]
             self._request_out_over_step = metrics["invocations"]
@@ -194,7 +194,7 @@ class KsimEnv(gym.Env):
                 latency = 0
             else:
                 # 4 là cold start time
-                latency = self._latency_over_step/4
+                latency = self._avg_request_latency/4
                 
             reward += 3 - (blocking_rate + latency + self._avg_power)
             

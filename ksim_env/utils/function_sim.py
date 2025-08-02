@@ -5,7 +5,7 @@ from ksim_env.utils.metrics import KFunctionResourceUsage
 from ksim_env.utils.appstate import AppState
 
 import simpy
-
+import logging
 class KSimulatorFactory(SimulatorFactory):
     def __init__(self, service_profile: dict) -> None:
         super().__init__()
@@ -57,10 +57,10 @@ class KFunctionSimulator(FunctionSimulator):
     def teardown(self, env: Environment, replica: FunctionReplica):
         self.release_resources(env, replica, self.service_profile[AppState.UNLOADED_MODEL])
 
-        replica.state = AppState.SUSPENDED
+        replica.state = AppState.SUSPENDING
         replica.locked = True
-        yield from self.claim_resources(env, replica, self.service_profile[AppState.SUSPENDED])
-        self.release_resources(env, replica, self.service_profile[AppState.SUSPENDED])
+        yield from self.claim_resources(env, replica, self.service_profile[AppState.SUSPENDING])
+        self.release_resources(env, replica, self.service_profile[AppState.SUSPENDING])
         
         yield from self.claim_resources(env, replica, self.service_profile[AppState.NULL])
         replica.state = AppState.NULL
@@ -95,7 +95,7 @@ class KFunctionSimulator(FunctionSimulator):
         # t_wait_start = env.now
         yield token
         # t_wait_end = env.now
-
+        # logging.info(f"pod latency {t_wait_end - t_wait_start}")
         # t_fet_start = env.now
         # logging.debug('invoking function %s on node %s', request, replica.node.name)
 

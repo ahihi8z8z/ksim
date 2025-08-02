@@ -16,34 +16,38 @@ def split_into_chunks(data, window):
     return np.array([np.array(data[i:i+window]) for i in range(0, len(data), window)])
 
 def handle_request_details(request_details, log_dir: str = None):
-    scaler_latency = []
+    latency = []
 
     for service, details in request_details.items():
-        scaler_latency = details.get('scaler_latency')
+        latency = details.get('latency')
 
     latency_detail_path = f"{log_dir}/latency_detail.pkl"
     with open(latency_detail_path, 'wb') as f:
-        pickle.dump(scaler_latency, f)
-            
-    def compute_cdf(data):
-        data = np.sort(data)
-        cdf = np.arange(1, len(data) + 1) / len(data)
-        return data, cdf
+        pickle.dump(latency, f)
+        
+    plot_latency(latency)
+    return latency_detail_path
+ 
+def compute_cdf(data):
+    data = np.sort(data)
+    cdf = np.arange(1, len(data) + 1) / len(data)
+    return data, cdf
 
-    x1, y1 = compute_cdf(scaler_latency)
+def plot_latency(latency_detail_path, log_dir):
+    with open(latency_detail_path, 'rb') as f:
+        latency = pickle.load(f)
+    x1, y1 = compute_cdf(latency)
     
-    fig, axs = plt.subplots(1, 1, figsize=(8, 12), sharex=False)
-
-    axs[0].plot(x1, y1, label='Latency', color='tab:blue')
-    axs[0].set_title('CDF of Latency')
-    axs[0].set_ylabel('CDF')
-    axs[0].grid(True)
-
-
-    fig.tight_layout()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(x1, y1, label='Latency', color='tab:blue')
+    ax.set_title('CDF of Latency')
+    ax.set_ylabel('CDF')
+    ax.set_xlabel('Latency (ms)')  # tuỳ vào đơn vị
+    ax.grid(True)
+    ax.legend()
+    plt.tight_layout()
     fig.savefig(os.path.join(log_dir, f"latency.png"))
     plt.close()
-    return latency_detail_path
 
 def plot_data(data_path, latency_detail_path, window_size, log_dir):
     data = pd.read_csv(data_path)
@@ -82,7 +86,7 @@ def plot_data(data_path, latency_detail_path, window_size, log_dir):
 
 
     labels = ['Dropped', 'Delayed', 'Non Delayed']
-    sizes = [len(request_drop), len(latency_detail), len(request_out) - len(latency_detail)]
+    sizes = [sum(request_drop), sum(latency_detail), sum(request_out) - sum(latency_detail)]
     filtered = [(l, s) for l, s in zip(labels, sizes) if s > 0]
     labels, sizes = zip(*filtered) if filtered else ([], [])
     def make_autopct(values):
@@ -108,11 +112,11 @@ def plot_data(data_path, latency_detail_path, window_size, log_dir):
     plt.close()
     
     fig, axs = plt.subplots(3, 1, figsize=(10, 6), sharex=True)
-    axs[0].plot(ram_util, window=window_size)
+    axs[0].plot(smooth_list(ram_util, window=window_size))
     axs[0].set_ylabel("RAM Util (%)")
     axs[0].grid(True)
 
-    axs[1].plot(power_util, window=window_size)
+    axs[1].plot(smooth_list(power_util, window=window_size))
     axs[1].set_ylabel("Power Util (%)")
     axs[1].set_xlabel("Time Step")
     axs[1].grid(True)
@@ -154,3 +158,17 @@ def plot_data(data_path, latency_detail_path, window_size, log_dir):
     plt.tight_layout()
     plt.savefig(f"{log_dir}/reward.png")
     plt.close()
+    
+def data_collection(data, rewards, info):
+    i=0
+    for env_data in data:
+        env_data["request_in"].append(info[i]['request_in_over_step'])
+        env_data["request_out"].append(info[i]['request_out_over_step'])
+        env_data["request_drop"].append(info[i]['request_drop_over_step'])
+        env_data["ram_util"].append(info[i]['ram_util'])
+        env_data["power_util"].append(info[i]['power_util'])
+        env_data["reward_list"].append(rewards[i])
+        env_data["null"].append(info[i]['NULL'])
+        env_data["unloaded"].append(info[i]['UNLOADED_MODEL'])
+        env_data["loaded"].append(info[i]['LOADED_MODEL'])
+        i+=1

@@ -13,7 +13,7 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
-from utils.plot_fig import handle_request_details, plot_data
+from utils.plot_fig import handle_request_details, plot_data, data_collection, plot_latency
 
 # Cấu hình log 
 log_config = json.load(open("log_config.json"))
@@ -166,19 +166,16 @@ def baseline(args, system_config):
         latency_detail_path = handle_request_details(info.get("request_details", {}), env_log_dir)
         plot_data(env_data_path, latency_detail_path, window_size=window_size, log_dir=env_log_dir)
 
-def data_collection(data, rewards, info):
-    i=0
-    for env_data in data:
-        env_data["request_in"].append(info[i]['request_in_over_step'])
-        env_data["request_out"].append(info[i]['request_out_over_step'])
-        env_data["request_drop"].append(info[i]['request_drop_over_step'])
-        env_data["ram_util"].append(info[i]['ram_util'])
-        env_data["power_util"].append(info[i]['power_util'])
-        env_data["reward_list"].append(rewards[i])
-        env_data["null"].append(info[i]['NULL'])
-        env_data["unloaded"].append(info[i]['UNLOADED_MODEL'])
-        env_data["loaded"].append(info[i]['LOADED_MODEL'])
-        i+=1
+def plot(args):
+    n_envs = args.n_envs
+    window_size = args.window_size
+    for i in range(n_envs):
+        env_log_dir = os.path.join(log_dir, f"env_{i}")
+        env_data_path = f"{env_log_dir}/data.csv"
+        latency_detail_path = f"{env_log_dir}/latency_detail.pkl"
+
+        plot_latency(latency_detail_path, env_log_dir)
+        plot_data(env_data_path, latency_detail_path, window_size=window_size, log_dir=env_log_dir)
 
 def main(args):
     global log_dir
@@ -188,7 +185,7 @@ def main(args):
         system_config_all = json.load(f)
         
     system_config = system_config_all["general"]
-    system_config.update(system_config_all[mode])
+    system_config.update(system_config_all.get(mode, {}))
     
     if args.clear_logs:
         log_file = f"{log_dir}/ksim.log"
@@ -202,15 +199,17 @@ def main(args):
         evaluate(args, system_config)
     elif mode == "baseline":
         baseline(args, system_config)
+    elif mode == "plot":
+        plot(args)   
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Script for running faas")
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["train", "eval", "baseline"], 
+        choices=["train", "eval", "baseline", "plot"], 
         required=True,
-        help="Choose one of: train, eval, baseline"
+        help="Choose one of: train, eval, baseline, plot"
     )
     parser.add_argument(
         "--algorithm",

@@ -145,25 +145,26 @@ class KsimEnv_V1(gym.Env):
             self._request_in_over_step = metrics["request_in"]
             
     def _get_info(self):  
-        i = 0
-        self.info['NULL'] = 0
-        self.info['UNLOADED_MODEL'] = 0
-        self.info['LOADED_MODEL'] = 0
-        faas = self.sim.env.faas
-        
-        for service_id, service_config in self.service_profile.items():
-            self.info['NULL'] = service_config["scale_max"] - len(faas.get_replicas2(service_id, AppState.CONCEIVED, lower=False, need_locked=False))
-            self.info['UNLOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
-            self.info['LOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
+        if self.get_detail:
+            i = 0
+            self.info['NULL'] = 0
+            self.info['UNLOADED_MODEL'] = 0
+            self.info['LOADED_MODEL'] = 0
+            faas = self.sim.env.faas
             
-            self.info['ram_util'] = self._avg_ram_utilization
-            self.info['cpu_util'] = self._avg_cpu_utilization
-            self.info['power_util'] = self._avg_power
-            self.info['request_out_over_step'] = self._request_out_over_step
-            self.info['request_in_over_step'] = self._request_in_over_step
-            self.info['request_drop_over_step'] = self._request_drop_over_step
-            self.info['cold_start_over_step'] = self._cold_starts_over_step
-            i = i + 1
+            for service_id, service_config in self.service_profile.items():
+                self.info['NULL'] = service_config["scale_max"] - len(faas.get_replicas2(service_id, AppState.CONCEIVED, lower=False, need_locked=False))
+                self.info['UNLOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.UNLOADED_MODEL, need_locked=False))
+                self.info['LOADED_MODEL'] = len(faas.get_replicas(service_id, AppState.LOADED_MODEL, need_locked=False))
+                
+                self.info['ram_util'] = self._avg_ram_utilization
+                self.info['cpu_util'] = self._avg_cpu_utilization
+                self.info['power_util'] = self._avg_power
+                self.info['request_out_over_step'] = self._request_out_over_step
+                self.info['request_in_over_step'] = self._request_in_over_step
+                self.info['request_drop_over_step'] = self._request_drop_over_step
+                self.info['cold_start_over_step'] = self._cold_starts_over_step
+                i = i + 1
             
         if self.truncated:
             self.info['TimeLimit.truncated'] = True
@@ -178,7 +179,8 @@ class KsimEnv_V1(gym.Env):
             if self._request_out_over_step == 0:
                 cold_start_rate = 0
             else:
-                cold_start_rate = self._cold_starts_over_step / self._request_out_over_step
+                # drop cung tinh la cold start
+                cold_start_rate = (self._cold_starts_over_step + self._request_drop_over_step) / self._request_in_over_step
                 
             reward -= cold_start_rate + self._avg_ram_utilization
             logging.info(f"Service {service_id} - Reward: {reward}, Cold Start Rate: {cold_start_rate}, RAM utilization: {self._avg_ram_utilization}")

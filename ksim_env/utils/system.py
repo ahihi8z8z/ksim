@@ -37,8 +37,10 @@ class KSystem(FaasSystem):
         # TODO let users inject LoadBalancer
         if lb == "round_robin":
             self.load_balancer = KRoundRobinLoadBalancer(env, self.replicas)
+            logging.info("Initialized round robin load balancer")
         elif lb == "least_connection":
             self.load_balancer = LeastConnectionLoadBalancer(env, self.replicas)
+            logging.info("Initialized least connection load balancer")
         else:
             raise ValueError(f"Unknown load balancer {lb}")
 
@@ -58,8 +60,6 @@ class KSystem(FaasSystem):
         self.states = ["NULL", "UNLOADED_MODEL", "LOADED_MODEL"]
         self.forward_transitions = [self.scale_up, self.do_load_model]
         self.backward_transitions = [self.scale_down, self.do_unload_model]
-        self.active_nodes = set()
-        
         
     def get_deployments(self) -> List[FunctionDeployment]:
         return list(self.functions_deployments.values())
@@ -120,7 +120,7 @@ class KSystem(FaasSystem):
         if self.scaler_config.get("scale_by_queue_requests_per_replica"):
             self.env.process(self.queue_faas_scalers[fd.name].run())
         if self.scaler_config.get("scale_by_lstm"):
-            self.env.process(self.queue_faas_scalers[fd.name].run())
+            self.env.process(self.lstm_scalers[fd.name].run())
 
         for f in fd.fn_containers:
             self.function_containers[f.image] = f
@@ -145,14 +145,11 @@ class KSystem(FaasSystem):
 
         retry = 0
         # Hàm này sẽ đợi cho đến khi replica được chuyển sang trạng thái UNLOADED_MODEL
-        while retry < 30 and replica.state != AppState.UNLOADED_MODEL:
-            yield self.env.timeout(0.5)
+        while replica.state != AppState.UNLOADED_MODEL:
+            yield self.env.timeout(0.1)
             retry += 1
         
-        if replica.state != AppState.UNLOADED_MODEL:
-            self.replicas[fd.name].remove(replica)
-        elif specific_replicas is not None:
-            specific_replicas.append(replica)
+        specific_replicas.append(replica)
         
     def invoke(self, request: FunctionRequest):
         if request.name not in self.functions_deployments.keys():
@@ -162,21 +159,25 @@ class KSystem(FaasSystem):
         t_received = self.env.now
 
         replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
-        if not replicas:
+        replicas = [replica for replica in replicas if len(replica.simulator.queue.queue) == 0]
+        
+        if len(replicas) == 0:
             retry = 0
-            while (len(self.get_replicas(request.name, AppState.LOADED_MODEL)) < 1)  and (retry < self.max_poll_attempts):
+            while len(replicas) == 0 and (retry < self.max_poll_attempts):
                 yield self.env.timeout(self.poll_interval)
+                replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
+                replicas = [replica for replica in replicas if len(replica.simulator.queue.queue) == 0]
                 retry += 1
             
         replicas = self.get_replicas(request.name, AppState.LOADED_MODEL)
-        replicas = [replica for replica in replicas if len(replica.simulator.queue.queue) > 0]
+        replicas = [replica for replica in replicas if len(replica.simulator.queue.queue) == 0]
         
         if not replicas:
-            self.env.metrics.log_drop(request.name, request.request_id)
+            self.env.metrics.log_drop(request.name, request.request_id, self.poll_interval*self.max_poll_attempts)
             return
         
         # logging.debug('asking load balancer for replica for request %d', request.request_id)
-        replica = self.next_replica(request)
+        replica = self.next_replica(request, replicas)
 
         logging.debug('dispatching request %s:%d to %s', request.name, request.request_id, replica.node.name)
 
@@ -220,6 +221,7 @@ class KSystem(FaasSystem):
         yield from replica.simulator.teardown(self.env, replica)
 
         self.env.cluster.remove_pod_from_node(replica.pod, node)
+        self.replicas[replica.function.name].remove(replica)
 
         self.env.metrics.log('allocation', {
             'cpu': 1 - (node.allocatable.cpu_millis / node.capacity.cpu_millis),
@@ -332,8 +334,8 @@ class KSystem(FaasSystem):
         #     logging.debug("Function %s wanted to scale, but not all requested replicas were deployed: %s", fn_name,
         #                 str(scale))
     
-    def next_replica(self, request) -> KFunctionReplica:
-        return self.load_balancer.next_replica(request)
+    def next_replica(self, request, replicas) -> KFunctionReplica:
+        return self.load_balancer.next_replica(request, replicas)
 
     def start(self):
         for process in self.env.background_processes:
@@ -383,7 +385,6 @@ class KSystem(FaasSystem):
 
             replica.node = self.env.get_node_state(result.suggested_host.name)
             node = replica.node.skippy_node
-            self.active_nodes.add(node)
 
             env.metrics.log('allocation', {
                 'cpu': 1 - (node.allocatable.cpu_millis / node.capacity.cpu_millis),
@@ -575,8 +576,12 @@ class KSystem(FaasSystem):
         # for replica in replicas:
         #     yield from replica.simulator.unload_model(self.env, replica)
 
-    def get_active_nodes(self):
-        return self.active_nodes
+    def get_active_nodes(self) -> set:
+        active_nodes = set()
+        for replicas in self.replicas.values():
+            for replica in replicas:
+                active_nodes.add(replica.node.name)
+        return active_nodes
     
     def change_idle_threshold(self, function_id, minute):
         scaler = self.lstm_scalers[function_id]

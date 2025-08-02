@@ -79,7 +79,8 @@ class ScalingConfiguration:
     target_average_rps_threshold = 0.1
     
     # lstm scaler
-    lstm_factor: float = 0.02  # factor to scale the LSTM prediction, default is 0.02
+    lstm_factor: float = 0.02  # factor to scale the LSTM prediction
+    lstm_sequence_length: int = 60
     lstm_model_path: str = None
     scaler_path: str = None
 
@@ -167,7 +168,8 @@ class KBenchmark(Benchmark):
             scaling_config.target_average_rps = config['target_average_rps']
             scaling_config.target_queue_length = config['target_queue_length']
             scaling_config.target_average_rps_threshold = config['target_average_rps_threshold']
-            scaling_config.lstm_factor = config.get('lstm_factor', 0.02)
+            scaling_config.lstm_factor = config.get('lstm_factor')
+            scaling_config.lstm_sequence_length = config.get('lstm_sequence_length')
             scaling_config.lstm_model_path = config.get('lstm_model_path')
             scaling_config.scaler_path = config.get('scaler_path')
 
